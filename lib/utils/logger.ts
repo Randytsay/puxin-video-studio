@@ -24,8 +24,13 @@ interface LoggerConfig {
   enableInDevelopment?: boolean;
 }
 
+// enableInProduction は「本番で WARN / ERROR を出すか」を決める。false だと
+// shouldLog が全レベルで false を返し、logError すら本番で無音になっていた
+// （各関数の JSDoc が「本番環境でも出力可能」と書いているのと矛盾していた）。
+// サーバ側の障害が痕跡なく消えるため、既定で有効にする。
+// shouldLog 側で DEBUG / INFO は本番では落とされる。
 const defaultConfig: LoggerConfig = {
-  enableInProduction: false,
+  enableInProduction: true,
   enableInDevelopment: true,
 };
 

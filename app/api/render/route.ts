@@ -20,6 +20,7 @@ function isUserCancelledRender(err: unknown): boolean {
 }
 import type { VideoClip, Subtitle, VideoResolution, VideoAspectRatio } from '@/src/types';
 import { createRateLimiter, getClientIp } from './rate-limit';
+import { sweepUploadsInBackground } from '@/lib/utils/retention';
 
 // Default location where Remotion caches the Chrome headless shell. If this
 // directory exists we can assume the browser is already downloaded and shrink
@@ -30,6 +31,45 @@ const REMOTION_BROWSER_CACHE_DIR = path.join(
   '.remotion',
   'chrome-headless-shell',
 );
+
+const REMOTION_ENTRY_POINT = path.join(process.cwd(), 'src', 'Root.tsx');
+
+// A fixed output directory for the webpack bundle. Without `outDir`, Remotion
+// mkdtemp()s a fresh `remotion-webpack-bundle-*` under os.tmpdir() on every
+// call and never removes it, so each render leaked tens of MB until reboot —
+// on top of paying for a full webpack rebuild per request.
+const REMOTION_BUNDLE_OUT_DIR = path.join(
+  process.cwd(),
+  'node_modules',
+  '.cache',
+  'remotion-bundle',
+);
+
+let bundlePromise: Promise<string> | null = null;
+
+function getRemotionBundle(): Promise<string> {
+  // In development, always rebuild so edits under src/ are picked up — the
+  // fixed outDir means we overwrite in place rather than accumulate.
+  if (process.env.NODE_ENV === 'development') {
+    return bundle({
+      entryPoint: REMOTION_ENTRY_POINT,
+      outDir: REMOTION_BUNDLE_OUT_DIR,
+    });
+  }
+  // Elsewhere the composition source is immutable for the life of the process,
+  // so compile once and share. Memoizing the promise (not the result) also
+  // collapses concurrent first requests into a single build.
+  if (!bundlePromise) {
+    bundlePromise = bundle({
+      entryPoint: REMOTION_ENTRY_POINT,
+      outDir: REMOTION_BUNDLE_OUT_DIR,
+    }).catch((err) => {
+      bundlePromise = null; // never cache a failed build
+      throw err;
+    });
+  }
+  return bundlePromise;
+}
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -86,11 +126,41 @@ type RenderEvent =
   | { type: 'done'; videoUrl: string; filename: string }
   | { type: 'error'; error: string };
 
+/**
+ * Hosts the renderer may fetch absolute URLs from, beyond its own origin.
+ * Comma-separated, e.g. RENDER_ALLOWED_MEDIA_HOSTS="cdn.example.com,img.example.com".
+ * Empty by default: absolute URLs are rejected unless explicitly allowed.
+ */
+const ALLOWED_MEDIA_HOSTS = (process.env.RENDER_ALLOWED_MEDIA_HOSTS ?? '')
+  .split(',')
+  .map((h) => h.trim().toLowerCase())
+  .filter(Boolean);
+
+/**
+ * Resolve a client-supplied media reference into a URL the headless browser is
+ * allowed to fetch. Returns null when the reference is not permitted.
+ *
+ * Absolute URLs are gated because inputProps are fetched by Chromium from the
+ * *server's* network position: an unfiltered `http://169.254.169.254/...` would
+ * pull cloud instance metadata into the rendered mp4, which the caller then
+ * downloads. Relative paths stay safe — they are pinned to our own origin.
+ */
 function resolveMediaUrl(url: string | null | undefined, origin: string): string | null {
   if (!url) return null;
-  if (url.startsWith('http://') || url.startsWith('https://')) return url;
   if (url.startsWith('/')) return `${origin}${url}`;
-  return url;
+
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+
+  const host = parsed.hostname.toLowerCase();
+  if (host === new URL(origin).hostname.toLowerCase()) return parsed.toString();
+  if (ALLOWED_MEDIA_HOSTS.includes(host)) return parsed.toString();
+  return null;
 }
 
 export async function POST(request: NextRequest) {
@@ -132,12 +202,34 @@ export async function POST(request: NextRequest) {
   }
 
   const origin = request.nextUrl.origin;
+
+  // Reject rather than silently drop: a disallowed URL that resolved to null
+  // would render a blank frame or a silent clip with no explanation.
+  const rejected: string[] = [];
+  const resolveOrReject = (url: string | null | undefined): string | null => {
+    if (!url) return null;
+    const resolved = resolveMediaUrl(url, origin);
+    if (!resolved) rejected.push(url);
+    return resolved;
+  };
+
   const resolvedClips = clips.map((clip) => ({
     ...clip,
-    imageUrl: resolveMediaUrl(clip.imageUrl, origin),
-    audioUrl: resolveMediaUrl(clip.audioUrl, origin) || '',
+    imageUrl: resolveOrReject(clip.imageUrl),
+    audioUrl: resolveOrReject(clip.audioUrl) || '',
   }));
-  const resolvedBgmUrl = resolveMediaUrl(bgmUrl, origin);
+  const resolvedBgmUrl = resolveOrReject(bgmUrl);
+
+  if (rejected.length > 0) {
+    return NextResponse.json(
+      {
+        error:
+          'Media URLs must be same-origin or an allowed host. Disallowed: ' +
+          rejected.slice(0, 5).join(', '),
+      },
+      { status: 400 },
+    );
+  }
 
   const compositionId = `ProductVideo-${resolution}-${aspectRatio.replace(':', '-')}`;
   const inputProps = {
@@ -195,8 +287,7 @@ export async function POST(request: NextRequest) {
           progress: 2,
           message: 'Preparing render engine…',
         });
-        const entryPoint = path.join(process.cwd(), 'src', 'Root.tsx');
-        const bundled = await bundle({ entryPoint });
+        const bundled = await getRemotionBundle();
 
         send({
           type: 'progress',
@@ -267,6 +358,9 @@ export async function POST(request: NextRequest) {
         send({ type: 'error', error: `Render failed: ${message}` });
       } finally {
         activeRenders--;
+        // Expire old uploads/outputs. Self-throttling; not awaited so it
+        // cannot hold the stream open.
+        void sweepUploadsInBackground();
         if (!closed) {
           try {
             controller.close();

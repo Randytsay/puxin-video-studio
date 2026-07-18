@@ -7,6 +7,7 @@
 // in Phase 1 of the refactor; not yet split further by track.
 
 import { useState, useRef, useEffect, useMemo } from 'react';
+import { useDragSession } from './hooks/useDragSession';
 import { useTranslations } from 'next-intl';
 import { debug } from '@/lib/utils/logger.client';
 import type { VideoClip, Subtitle } from '@/src/types';
@@ -108,12 +109,17 @@ export function ModernTimeline({
   const subtitleDragStartTime = useRef<number>(0);
   const subtitleDragStartOffset = useRef<number>(0);
   
-  // イベントリスナーの参照を保持（クリーンアップ用）
-  const pinDragHandlersRef = useRef<{ mousemove: ((e: MouseEvent) => void) | null; mouseup: (() => void) | null }>({ mousemove: null, mouseup: null });
   const isDraggingPinRef = useRef(false); // ピンのドラッグ状態をrefで管理（クロージャ問題を回避）
-  const resizeHandlersRef = useRef<{ mousemove: ((e: MouseEvent) => void) | null; mouseup: (() => void) | null }>({ mousemove: null, mouseup: null });
-  const subtitleResizeHandlersRef = useRef<{ mousemove: ((e: MouseEvent) => void) | null; mouseup: (() => void) | null }>({ mousemove: null, mouseup: null });
-  const subtitleDragHandlersRef = useRef<{ mousemove: ((e: MouseEvent) => void) | null; mouseup: (() => void) | null }>({ mousemove: null, mouseup: null });
+
+  // ドラッグ操作ごとに1セッション。attach / detach / アンマウント時の後始末は
+  // useDragSession が持つため、ここで個別にリスナー参照を保持する必要はない。
+  // 以前は4種類ぶんの ref を手書きし、アンマウント時のクリーンアップに
+  // そのうち2つしか列挙されていなかった（ピンとクリップリサイズが漏れていた）。
+  const clipResizeDrag = useDragSession();
+  const subtitleResizeDrag = useDragSession();
+  const subtitleDrag = useDragSession();
+  // ピンだけはキャプチャフェーズで拾って優先度を上げる。
+  const pinDrag = useDragSession({ capture: true });
 
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
@@ -438,15 +444,7 @@ export function ModernTimeline({
   const handleResizeStart = (e: React.MouseEvent, clipIndex: number, handle: 'left' | 'right') => {
     e.stopPropagation();
     e.preventDefault();
-    
-    // 既存のイベントリスナーをクリーンアップ
-    if (resizeHandlersRef.current.mousemove) {
-      document.removeEventListener('mousemove', resizeHandlersRef.current.mousemove);
-    }
-    if (resizeHandlersRef.current.mouseup) {
-      document.removeEventListener('mouseup', resizeHandlersRef.current.mouseup);
-    }
-    
+
     const clip = clips[clipIndex];
     const startTime = clipStartTimes[clipIndex];
     
@@ -459,17 +457,10 @@ export function ModernTimeline({
     // (resizingClipIndex / resizeHandle) は setState 直後の同フェーズで
     // 読むと未反映のため、以前はこの mouseMove ハンドラが常に null を
     // 読んで早期 return していた。引数なら正しくキャプチャされる。
-    const handleMouseMove = (e: MouseEvent) => {
+    clipResizeDrag.start((e) => {
       if (!timelineRef.current || !timelineContainerRef.current) {
         // リサイズが終了した場合、クリーンアップ
-        if (resizeHandlersRef.current.mousemove) {
-          document.removeEventListener('mousemove', resizeHandlersRef.current.mousemove);
-          resizeHandlersRef.current.mousemove = null;
-        }
-        if (resizeHandlersRef.current.mouseup) {
-          document.removeEventListener('mouseup', resizeHandlersRef.current.mouseup);
-          resizeHandlersRef.current.mouseup = null;
-        }
+        clipResizeDrag.stop();
         return;
       }
 
@@ -501,43 +492,16 @@ export function ModernTimeline({
           onClipEdit(clipIndex, { duration: newDuration });
         }
       }
-    };
-    
-    const handleMouseUp = () => {
+    }, () => {
       setResizingClipIndex(null);
       setResizeHandle(null);
-      
-      // イベントリスナーを削除
-      if (resizeHandlersRef.current.mousemove) {
-        document.removeEventListener('mousemove', resizeHandlersRef.current.mousemove);
-        resizeHandlersRef.current.mousemove = null;
-      }
-      if (resizeHandlersRef.current.mouseup) {
-        document.removeEventListener('mouseup', resizeHandlersRef.current.mouseup);
-        resizeHandlersRef.current.mouseup = null;
-      }
-    };
-    
-    // イベントハンドラーをrefに保存
-    resizeHandlersRef.current.mousemove = handleMouseMove;
-    resizeHandlersRef.current.mouseup = handleMouseUp;
-    
-    document.addEventListener('mousemove', handleMouseMove);
-    document.addEventListener('mouseup', handleMouseUp);
+    });
   };
 
   // 字幕リサイズハンドルのマウスダウン
   const handleSubtitleResizeStart = (e: React.MouseEvent, subtitleId: string, handle: 'left' | 'right') => {
     e.stopPropagation();
     e.preventDefault();
-    
-    // 既存のイベントリスナーをクリーンアップ
-    if (subtitleResizeHandlersRef.current.mousemove) {
-      document.removeEventListener('mousemove', subtitleResizeHandlersRef.current.mousemove);
-    }
-    if (subtitleResizeHandlersRef.current.mouseup) {
-      document.removeEventListener('mouseup', subtitleResizeHandlersRef.current.mouseup);
-    }
     
     const subtitle = subtitles.find(s => s.id === subtitleId);
     if (!subtitle) return;
@@ -548,25 +512,20 @@ export function ModernTimeline({
     subtitleResizeStartEndTime.current = subtitle.endTime;
     
     // グローバルマウスイベントを設定
-    const handleMouseMove = (e: MouseEvent) => {
+    subtitleResizeDrag.start((e) => {
       if (!timelineRef.current || !timelineContainerRef.current) {
         // リサイズが終了した場合、クリーンアップ
-        if (subtitleResizeHandlersRef.current.mousemove) {
-          document.removeEventListener('mousemove', subtitleResizeHandlersRef.current.mousemove);
-          subtitleResizeHandlersRef.current.mousemove = null;
-        }
-        if (subtitleResizeHandlersRef.current.mouseup) {
-          document.removeEventListener('mouseup', subtitleResizeHandlersRef.current.mouseup);
-          subtitleResizeHandlersRef.current.mouseup = null;
-        }
+        subtitleResizeDrag.stop();
         return;
       }
-      
+
       const containerRect = timelineContainerRef.current.getBoundingClientRect();
       const timelineRect = timelineRef.current.getBoundingClientRect();
       const x = e.clientX - containerRect.left + timelineContainerRef.current.scrollLeft;
       const percentage = x / timelineRect.width;
-      const time = Math.max(0, Math.min(totalDuration, percentage * totalDuration));
+      // レイアウトは extendedDuration (= totalDuration + 3) を基準に描画しているため、ポインタ→時刻の逆変換も同じ分母を使う。totalDuration で割ると掴んだ位置より手前にずれ、終端ほど誤差が広がっていた。
+      const extendedDuration = totalDuration + 3;
+      const time = Math.max(0, Math.min(totalDuration, percentage * extendedDuration));
       
       const currentSubtitle = subtitles.find(s => s.id === subtitleId);
       if (!currentSubtitle) return;
@@ -598,29 +557,10 @@ export function ModernTimeline({
           }
         }
       }
-    };
-    
-    const handleMouseUp = () => {
+    }, () => {
       setResizingSubtitleId(null);
       setSubtitleResizeHandle(null);
-      
-      // イベントリスナーを削除
-      if (subtitleResizeHandlersRef.current.mousemove) {
-        document.removeEventListener('mousemove', subtitleResizeHandlersRef.current.mousemove);
-        subtitleResizeHandlersRef.current.mousemove = null;
-      }
-      if (subtitleResizeHandlersRef.current.mouseup) {
-        document.removeEventListener('mouseup', subtitleResizeHandlersRef.current.mouseup);
-        subtitleResizeHandlersRef.current.mouseup = null;
-      }
-    };
-    
-    // イベントハンドラーをrefに保存
-    subtitleResizeHandlersRef.current.mousemove = handleMouseMove;
-    subtitleResizeHandlersRef.current.mouseup = handleMouseUp;
-    
-    document.addEventListener('mousemove', handleMouseMove);
-    document.addEventListener('mouseup', handleMouseUp);
+    });
   };
 
   // 字幕ドラッグ開始
@@ -630,14 +570,6 @@ export function ModernTimeline({
     
     // リサイズ中や他の操作中はドラッグを無視
     if (resizingSubtitleId || resizingClipIndex || isDraggingPin) return;
-    
-    // 既存のイベントリスナーをクリーンアップ
-    if (subtitleDragHandlersRef.current.mousemove) {
-      document.removeEventListener('mousemove', subtitleDragHandlersRef.current.mousemove);
-    }
-    if (subtitleDragHandlersRef.current.mouseup) {
-      document.removeEventListener('mouseup', subtitleDragHandlersRef.current.mouseup);
-    }
     
     const subtitle = subtitles.find(s => s.id === subtitleId);
     if (!subtitle) return;
@@ -657,17 +589,20 @@ export function ModernTimeline({
     subtitleDragStartOffset.current = subtitle.startTime - clickTime; // クリック位置からのオフセット（開始時間とクリック位置の差）
     
     // グローバルマウスイベントを設定
-    const handleMouseMove = (e: MouseEvent) => {
+    subtitleDrag.start((e) => {
       if (!timelineRef.current || !timelineContainerRef.current) {
         setDraggingSubtitleId(null);
+        subtitleDrag.stop();
         return;
       }
-      
+
       const containerRect = timelineContainerRef.current.getBoundingClientRect();
       const timelineRect = timelineRef.current.getBoundingClientRect();
       const x = e.clientX - containerRect.left + timelineContainerRef.current.scrollLeft;
       const percentage = x / timelineRect.width;
-      const time = Math.max(0, Math.min(totalDuration, percentage * totalDuration));
+      // レイアウトは extendedDuration (= totalDuration + 3) を基準に描画しているため、ポインタ→時刻の逆変換も同じ分母を使う。totalDuration で割ると掴んだ位置より手前にずれ、終端ほど誤差が広がっていた。
+      const extendedDuration = totalDuration + 3;
+      const time = Math.max(0, Math.min(totalDuration, percentage * extendedDuration));
       
       const currentSubtitle = subtitles.find(s => s.id === subtitleId);
       if (!currentSubtitle) return;
@@ -687,59 +622,22 @@ export function ModernTimeline({
         });
         
         if (!hasOverlap && (newStartTime !== currentSubtitle.startTime || newEndTime !== currentSubtitle.endTime)) {
-          onSubtitleEdit(subtitleId, { 
+          onSubtitleEdit(subtitleId, {
             startTime: newStartTime,
-            endTime: newEndTime 
+            endTime: newEndTime
           });
         }
       }
-    };
-    
-    const handleMouseUp = () => {
+    }, () => {
       setDraggingSubtitleId(null);
-      
-      // イベントリスナーを削除
-      if (subtitleDragHandlersRef.current.mousemove) {
-        document.removeEventListener('mousemove', subtitleDragHandlersRef.current.mousemove);
-        subtitleDragHandlersRef.current.mousemove = null;
-      }
-      if (subtitleDragHandlersRef.current.mouseup) {
-        document.removeEventListener('mouseup', subtitleDragHandlersRef.current.mouseup);
-        subtitleDragHandlersRef.current.mouseup = null;
-      }
-    };
-    
-    // イベントハンドラーをrefに保存
-    subtitleDragHandlersRef.current.mousemove = handleMouseMove;
-    subtitleDragHandlersRef.current.mouseup = handleMouseUp;
-    
-    document.addEventListener('mousemove', handleMouseMove);
-    document.addEventListener('mouseup', handleMouseUp);
+    });
   };
 
-  // コンポーネントのアンマウント時に字幕関連のイベントリスナーとタイマーをクリーンアップ
+  // コンポーネントのアンマウント時にタイマーをクリーンアップ。
+  // ドラッグ系リスナーの後始末は useDragSession が各セッションで行うため、
+  // ここに列挙する必要はない（列挙漏れがそもそも起きえない）。
   useEffect(() => {
     return () => {
-      // 字幕リサイズのイベントリスナーをクリーンアップ
-      if (subtitleResizeHandlersRef.current.mousemove) {
-        document.removeEventListener('mousemove', subtitleResizeHandlersRef.current.mousemove);
-        subtitleResizeHandlersRef.current.mousemove = null;
-      }
-      if (subtitleResizeHandlersRef.current.mouseup) {
-        document.removeEventListener('mouseup', subtitleResizeHandlersRef.current.mouseup);
-        subtitleResizeHandlersRef.current.mouseup = null;
-      }
-      
-      // 字幕ドラッグのイベントリスナーをクリーンアップ
-      if (subtitleDragHandlersRef.current.mousemove) {
-        document.removeEventListener('mousemove', subtitleDragHandlersRef.current.mousemove);
-        subtitleDragHandlersRef.current.mousemove = null;
-      }
-      if (subtitleDragHandlersRef.current.mouseup) {
-        document.removeEventListener('mouseup', subtitleDragHandlersRef.current.mouseup);
-        subtitleDragHandlersRef.current.mouseup = null;
-      }
-      
       // タイマーのクリーンアップ
       if (zoomUpdateTimeoutRef.current) {
         clearTimeout(zoomUpdateTimeoutRef.current);
@@ -926,14 +824,6 @@ export function ModernTimeline({
               e.preventDefault();
               e.nativeEvent.stopImmediatePropagation();
               
-              // 既存のイベントリスナーをクリーンアップ
-              if (pinDragHandlersRef.current.mousemove) {
-                document.removeEventListener('mousemove', pinDragHandlersRef.current.mousemove, true);
-              }
-              if (pinDragHandlersRef.current.mouseup) {
-                document.removeEventListener('mouseup', pinDragHandlersRef.current.mouseup, true);
-              }
-              
               setIsDraggingPin(true);
               isDraggingPinRef.current = true; // refも更新
               
@@ -957,28 +847,23 @@ export function ModernTimeline({
               // 現在位置のクリップを選択
               selectClipAtTime(currentTime);
               
-              const handleMouseMove = (e: MouseEvent) => {
+              pinDrag.start((e) => {
                 // ピンのドラッグ中であることを再確認（refを使用して最新の値を取得）
                 if (!isDraggingPinRef.current) {
                   // ドラッグが終了した場合、クリーンアップ
-                  if (pinDragHandlersRef.current.mousemove) {
-                    document.removeEventListener('mousemove', pinDragHandlersRef.current.mousemove, true);
-                    pinDragHandlersRef.current.mousemove = null;
-                  }
-                  if (pinDragHandlersRef.current.mouseup) {
-                    document.removeEventListener('mouseup', pinDragHandlersRef.current.mouseup, true);
-                    pinDragHandlersRef.current.mouseup = null;
-                  }
+                  pinDrag.stop();
                   return;
                 }
-                
+
                 if (!timelineRef.current || !timelineContainerRef.current) return;
                 const containerRect = timelineContainerRef.current.getBoundingClientRect();
                 const timelineRect = timelineRef.current.getBoundingClientRect();
                 // スクロール位置を考慮した相対位置
                 const x = e.clientX - containerRect.left + timelineContainerRef.current.scrollLeft;
                 const percentage = x / timelineRect.width;
-                const newTime = Math.max(0, Math.min(totalDuration, percentage * totalDuration));
+                // レイアウトは extendedDuration (= totalDuration + 3) を基準に描画しているため、ポインタ→時刻の逆変換も同じ分母を使う。totalDuration で割ると掴んだ位置より手前にずれ、終端ほど誤差が広がっていた。
+                const extendedDuration = totalDuration + 3;
+                const newTime = Math.max(0, Math.min(totalDuration, percentage * extendedDuration));
                 
                 // 時間が有効な場合のみ移動（0秒でない、または意図的に0秒の場合）
                 if (newTime >= 0 && newTime <= totalDuration) {
@@ -987,30 +872,10 @@ export function ModernTimeline({
                   // ピンの位置にあるクリップを自動選択
                   selectClipAtTime(newTime);
                 }
-              };
-              
-              const handleMouseUp = () => {
+              }, () => {
                 setIsDraggingPin(false);
                 isDraggingPinRef.current = false; // refも更新
-                
-                // イベントリスナーを削除
-                if (pinDragHandlersRef.current.mousemove) {
-                  document.removeEventListener('mousemove', pinDragHandlersRef.current.mousemove, true);
-                  pinDragHandlersRef.current.mousemove = null;
-                }
-                if (pinDragHandlersRef.current.mouseup) {
-                  document.removeEventListener('mouseup', pinDragHandlersRef.current.mouseup, true);
-                  pinDragHandlersRef.current.mouseup = null;
-                }
-              };
-              
-              // イベントハンドラーをrefに保存
-              pinDragHandlersRef.current.mousemove = handleMouseMove;
-              pinDragHandlersRef.current.mouseup = handleMouseUp;
-              
-              // グローバルイベントリスナーを追加（キャプチャフェーズで追加して優先度を上げる）
-              document.addEventListener('mousemove', handleMouseMove, true);
-              document.addEventListener('mouseup', handleMouseUp, true);
+              });
             }}
           >
             <div className="absolute -top-6 left-1/2 -translate-x-1/2 w-0 h-0 border-l-4 border-r-4 border-b-4 border-transparent border-b-red-500 pointer-events-none" />
@@ -1231,8 +1096,8 @@ export function ModernTimeline({
                   const x = e.clientX - containerRect.left + timelineContainerRef.current.scrollLeft;
                   const percentage = x / timelineRect.width;
                   // タイムラインの表示範囲を3秒延長しているため、totalDuration + 3を基準に計算
-      const extendedDuration = totalDuration + 3;
-      const time = percentage * extendedDuration;
+                  const extendedDuration = totalDuration + 3;
+                  const time = percentage * extendedDuration;
                   
                   // どのクリップの前にドロップするかを判定
                   let targetIndex = index;

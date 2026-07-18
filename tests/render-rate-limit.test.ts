@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createRateLimiter, getClientIp } from '@/app/api/render/rate-limit';
 
 describe('createRateLimiter — sliding window', () => {
@@ -100,32 +100,75 @@ describe('getClientIp', () => {
     return { headers: new Headers(headerEntries) };
   }
 
-  it('returns the first hop from x-forwarded-for', () => {
-    expect(getClientIp(req([['x-forwarded-for', '203.0.113.5, 10.0.0.1, 10.0.0.2']]))).toBe('203.0.113.5');
+  const original = process.env.TRUST_PROXY_HEADERS;
+  afterEach(() => {
+    if (original === undefined) delete process.env.TRUST_PROXY_HEADERS;
+    else process.env.TRUST_PROXY_HEADERS = original;
   });
 
-  it('trims surrounding whitespace in x-forwarded-for', () => {
-    expect(getClientIp(req([['x-forwarded-for', '  203.0.113.5  , 10.0.0.1']]))).toBe('203.0.113.5');
+  describe('without TRUST_PROXY_HEADERS (default)', () => {
+    beforeEach(() => {
+      delete process.env.TRUST_PROXY_HEADERS;
+    });
+
+    // Forwarding headers are attacker-controlled on a directly-exposed server;
+    // honouring them would let one client mint an unlimited number of buckets.
+    it('ignores x-forwarded-for entirely', () => {
+      expect(getClientIp(req([['x-forwarded-for', '203.0.113.5, 10.0.0.1']]))).toBe('unknown');
+    });
+
+    it('ignores x-real-ip entirely', () => {
+      expect(getClientIp(req([['x-real-ip', '198.51.100.7']]))).toBe('unknown');
+    });
+
+    it('returns "unknown" when no proxy headers are set', () => {
+      expect(getClientIp(req([]))).toBe('unknown');
+    });
   });
 
-  it('falls back to x-real-ip when x-forwarded-for is absent', () => {
-    expect(getClientIp(req([['x-real-ip', '198.51.100.7']]))).toBe('198.51.100.7');
-  });
+  describe('with TRUST_PROXY_HEADERS=1', () => {
+    beforeEach(() => {
+      process.env.TRUST_PROXY_HEADERS = '1';
+    });
 
-  it('prefers x-forwarded-for over x-real-ip when both are present', () => {
-    expect(
-      getClientIp(req([
-        ['x-forwarded-for', '203.0.113.5'],
-        ['x-real-ip', '198.51.100.7'],
-      ])),
-    ).toBe('203.0.113.5');
-  });
+    // The rightmost hop is the one appended by the nearest trusted proxy;
+    // everything to its left was supplied by the client and is forgeable.
+    it('returns the last (nearest-proxy) hop from x-forwarded-for', () => {
+      expect(getClientIp(req([['x-forwarded-for', '203.0.113.5, 10.0.0.1, 10.0.0.2']]))).toBe('10.0.0.2');
+    });
 
-  it('returns "unknown" when no proxy headers are set', () => {
-    expect(getClientIp(req([]))).toBe('unknown');
-  });
+    it('is not fooled by a client-injected leading hop', () => {
+      const spoofed = getClientIp(req([['x-forwarded-for', 'attacker-chosen, 10.0.0.9']]));
+      expect(spoofed).toBe('10.0.0.9');
+    });
 
-  it('returns "unknown" for an empty x-forwarded-for value', () => {
-    expect(getClientIp(req([['x-forwarded-for', '']]))).toBe('unknown');
+    it('trims surrounding whitespace in x-forwarded-for', () => {
+      expect(getClientIp(req([['x-forwarded-for', '  203.0.113.5  ,  10.0.0.1  ']]))).toBe('10.0.0.1');
+    });
+
+    it('uses the sole entry when x-forwarded-for has one hop', () => {
+      expect(getClientIp(req([['x-forwarded-for', '203.0.113.5']]))).toBe('203.0.113.5');
+    });
+
+    it('falls back to x-real-ip when x-forwarded-for is absent', () => {
+      expect(getClientIp(req([['x-real-ip', '198.51.100.7']]))).toBe('198.51.100.7');
+    });
+
+    it('prefers x-forwarded-for over x-real-ip when both are present', () => {
+      expect(
+        getClientIp(req([
+          ['x-forwarded-for', '203.0.113.5'],
+          ['x-real-ip', '198.51.100.7'],
+        ])),
+      ).toBe('203.0.113.5');
+    });
+
+    it('returns "unknown" when no proxy headers are set', () => {
+      expect(getClientIp(req([]))).toBe('unknown');
+    });
+
+    it('returns "unknown" for an empty x-forwarded-for value', () => {
+      expect(getClientIp(req([['x-forwarded-for', '']]))).toBe('unknown');
+    });
   });
 });

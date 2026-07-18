@@ -9,6 +9,7 @@ import {
   staticFile,
 } from 'remotion';
 import { ProductVideoProps, TransitionType } from './types';
+import { computeClipFrameSpans, computeTotalFrames } from './timeline';
 import { Subtitle } from './Subtitle';
 import { TimeBasedSubtitle } from './TimeBasedSubtitle';
 import { ClipTransition } from './Transitions';
@@ -55,15 +56,18 @@ export const ProductVideo: React.FC<ProductVideoProps> = ({ clips, productName, 
   // 音声の1.2倍速再生（音声の再生速度のみを上げる、シーンの表示時間はclip.durationに基づく）
   const audioPlaybackRate = 1.2;
   
+  // フレーム割り当ては src/timeline.ts に集約（累積境界を丸めるため、
+  // クリップ同士が1フレーム重なることがない）。Root.tsx / VideoEditor.tsx も
+  // 同じ関数から導出するので、三者の計算がずれない。
+  const frameSpans = computeClipFrameSpans(clips, safeFps);
+
   const sequences = clips.map((clip, index) => {
     // クリップの実際のdurationを使用（デフォルトは3秒）
     const clipDuration = clip.duration || 3.0;
-    // Math.ceilを使用して、Root.tsxとVideoEditor.tsxの計算と一致させる
-    const startFrame = Math.ceil(currentTime * safeFps);
-    const durationInFrames = Math.max(1, Math.ceil(clipDuration * safeFps));
+    const { startFrame, durationInFrames } = frameSpans[index];
     // 次のクリップの開始時間を正確に計算（clip.durationに基づいて加算）
     currentTime += clipDuration;
-    
+
     // トランジションタイプを選択
     // clip.transitionTypeが明示的に設定されている場合はそれを使用
     // 未設定の場合は'none'（トランジションなし）
@@ -116,9 +120,8 @@ export const ProductVideo: React.FC<ProductVideoProps> = ({ clips, productName, 
   // 総時間を計算（各クリップのdurationの合計）
   const totalDuration = clips.reduce((sum, clip) => sum + (clip.duration || 3.0), 0);
   
-  // BGMの総フレーム数を計算
-  // Math.ceilを使用して、Root.tsxとVideoEditor.tsxの計算と一致させる
-  const totalDurationInFrames = Math.max(1, Math.ceil(totalDuration * safeFps));
+  // BGMの総フレーム数 = 各クリップのスパンの合計（構成上、必ず一致する）
+  const totalDurationInFrames = Math.max(1, computeTotalFrames(clips, safeFps));
 
   return (
     <AbsoluteFill style={{ backgroundColor: '#1e1e1e' }}>

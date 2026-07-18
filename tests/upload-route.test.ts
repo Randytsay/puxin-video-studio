@@ -136,10 +136,10 @@ describe('POST /api/upload — security', () => {
     const res = await callUpload(pngFile('../../etc/passwd.png'));
     expect(res.status).toBe(200);
     const body = await res.json();
-    // Slashes and dots that form ".." get replaced with underscores.
+    // Only the basename stem survives; separators can never reach the path.
     expect(body.url).not.toMatch(/\.\.\//);
     expect(body.url).not.toMatch(/etc\/passwd/);
-    expect(body.filename).toMatch(/_+etc_passwd\.png$/);
+    expect(body.filename).toMatch(/passwd\.png$/);
 
     // The actual save path must remain inside public/uploads/image/.
     const fs = await import('fs/promises');
@@ -147,15 +147,59 @@ describe('POST /api/upload — security', () => {
     expect(String(savePath)).toMatch(/\/public\/uploads\/image\/[^/]+\.png$/);
   });
 
-  it('caps the sanitized filename suffix to 100 characters', async () => {
+  it('caps the sanitized filename stem to 100 characters', async () => {
     const longName = 'x'.repeat(300) + '.png';
     const res = await callUpload(pngFile(longName));
     expect(res.status).toBe(200);
     const body = await res.json();
-    // filename = `${ts}-${rnd}-${safeName}`; safeName itself is sliced to 100.
-    // So the trailing portion after the last hyphen is at most 100 chars.
+    // filename = `${ts}-${rnd}-${stem}${ext}`; the stem alone is sliced to 100.
     const trailing = body.filename.split('-').slice(2).join('-');
-    expect(trailing.length).toBeLessThanOrEqual(100);
+    expect(trailing).toBe('x'.repeat(100) + '.png');
+  });
+
+  // --- Extension is derived from detected kind, never from the client name ---
+
+  it('rewrites a .html name on audio-signature content to a safe extension', async () => {
+    // Two MPEG frame-sync bytes are enough to pass detectMediaKind as audio.
+    // Honouring the client extension here would store a same-origin HTML
+    // document under public/ — stored XSS that nosniff cannot mitigate.
+    const res = await callUpload(
+      makeFile([0xff, 0xf0], 'pwn.html', 'audio/mpeg'),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.type).toBe('audio');
+    expect(body.filename).not.toMatch(/\.html$/);
+    expect(body.filename).toMatch(/\.mp3$/);
+  });
+
+  it('rewrites .svg on image content (SVG can carry script)', async () => {
+    const res = await callUpload(pngFile('logo.svg'));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.filename).toMatch(/\.jpg$/);
+  });
+
+  it('keeps an extension that is allowed for the detected kind', async () => {
+    const res = await callUpload(pngFile('photo.png'));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.filename).toMatch(/photo\.png$/);
+  });
+
+  it('falls back to the canonical extension when the name has none', async () => {
+    const res = await callUpload(pngFile('no-extension'));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.filename).toMatch(/no-extension\.jpg$/);
+  });
+
+  it('does not let an audio extension ride on video-signature content', async () => {
+    const res = await callUpload(mp4File('disguise.mp3', 'mp42'));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.type).toBe('video');
+    expect(body.filename).toMatch(/\.mp4$/);
   });
 
   it('respects magic-byte truth over claimed Content-Type for video brands', async () => {

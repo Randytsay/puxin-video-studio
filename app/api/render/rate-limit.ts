@@ -63,17 +63,30 @@ export function createRateLimiter(config: RateLimiterConfig): RateLimiter {
 }
 
 /**
- * Extract the originating client IP from a Next.js request, in this order:
- *   1. The first entry of `x-forwarded-for` (when behind a reverse proxy).
- *   2. `x-real-ip` (alternative proxy convention).
- *   3. `'unknown'` sentinel — keeps the limiter functional rather than
- *      throwing, but groups all directly-connected clients into one bucket.
+ * Extract the originating client IP from a Next.js request.
+ *
+ * Forwarding headers are read ONLY when TRUST_PROXY_HEADERS is set, because
+ * any client can send them. Trusting `x-forwarded-for` unconditionally makes
+ * the limiter a no-op: an attacker increments a fake IP per request and every
+ * call lands in a fresh bucket, on the endpoint that spawns Chromium + ffmpeg.
+ *
+ * Set TRUST_PROXY_HEADERS=1 only when the app sits behind a reverse proxy that
+ * *overwrites* these headers (Vercel, Cloudflare, an ALB you control). When
+ * unset, all direct clients share the 'unknown' bucket — a limiter that is too
+ * strict under direct exposure, which is the safe direction to fail.
  */
 export function getClientIp(request: { headers: Headers }): string {
+  // Read per-call rather than at module load so deployments (and tests) can
+  // flip it without a rebuild.
+  if (process.env.TRUST_PROXY_HEADERS !== '1') return 'unknown';
+
   const xff = request.headers.get('x-forwarded-for');
   if (xff) {
-    const first = xff.split(',')[0]?.trim();
-    if (first) return first;
+    // Rightmost entry is the one appended by the nearest trusted proxy;
+    // everything to its left is client-supplied and forgeable.
+    const hops = xff.split(',').map((h) => h.trim()).filter(Boolean);
+    const nearest = hops[hops.length - 1];
+    if (nearest) return nearest;
   }
   const xri = request.headers.get('x-real-ip');
   if (xri) return xri.trim();

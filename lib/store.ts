@@ -5,7 +5,11 @@ import type { VideoClip } from '@/src/types';
 
 interface AppState {
   clips: VideoClip[];
-  setClips: (clips: VideoClip[]) => void;
+  /**
+   * Accepts a functional update so the editor can derive from the latest
+   * clips without threading a stale array through props.
+   */
+  setClips: (clips: VideoClip[] | ((prev: VideoClip[]) => VideoClip[])) => void;
   productData: ProductData | null;
   selectedTemplate: TemplateType | null;
   scenario: Scenario | null;
@@ -34,7 +38,10 @@ interface AppState {
 
 export const useAppStore = create<AppState>((set) => ({
   clips: [],
-  setClips: (clips) => set({ clips }),
+  setClips: (clips) =>
+    set((state) => ({
+      clips: typeof clips === 'function' ? clips(state.clips) : clips,
+    })),
   productData: null,
   selectedTemplate: null,
   scenario: null,
@@ -56,10 +63,11 @@ export const useAppStore = create<AppState>((set) => ({
     set({ videoDuration: rounded });
   },
   setVideoResolution: (resolution) => set({ videoResolution: resolution }),
-  setVideoAspectRatio: (aspectRatio) => {
-    // 一時的に16:9に固定（動画の形の選択を無効化）
-    set({ videoAspectRatio: '16:9' });
-  },
+  // The product currently ships 16:9 only. That constraint is enforced by not
+  // exposing an aspect-ratio picker (and by the '16:9' initial value) — not by
+  // having this setter silently discard its argument, which previously made a
+  // 9:16 selection render as 16:9 with no error anywhere.
+  setVideoAspectRatio: (aspectRatio) => set({ videoAspectRatio: aspectRatio }),
   setVideoTempo: (tempo) => set({ videoTempo: tempo }),
   setAudioEnabled: (enabled) => set({ audioEnabled: enabled }),
   setBgmUrl: (url) => set({ bgmUrl: url }),

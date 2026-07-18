@@ -15,12 +15,12 @@
 import { useCallback } from 'react';
 import { useTranslations } from 'next-intl';
 import { useEditorStore } from '@/lib/editorStore';
+import { reindexClips } from '@/lib/utils/clips';
 import type { VideoClip } from '@/src/types';
 
 export interface UseClipHandlersArgs {
   clips: VideoClip[];
   onClipsChange: (clips: VideoClip[] | ((prev: VideoClip[]) => VideoClip[])) => void;
-  rippleEditMode: boolean;
   copiedClip: VideoClip | null;
   setCopiedClip: (clip: VideoClip | null) => void;
 }
@@ -28,7 +28,6 @@ export interface UseClipHandlersArgs {
 export function useClipHandlers({
   clips,
   onClipsChange,
-  rippleEditMode,
   copiedClip,
   setCopiedClip,
 }: UseClipHandlersArgs) {
@@ -48,35 +47,31 @@ export function useClipHandlers({
 
   const handleClipDelete = useCallback(
     (index: number) => {
-      const updatedClips = clips.filter((_, i) => i !== index);
+      const updatedClips = reindexClips(clips.filter((_, i) => i !== index));
       addToHistory(updatedClips);
       onClipsChange(updatedClips);
 
-      // Selection bookkeeping for ripple-edit mode (the only path that
-      // currently differs from "normal" mode in the original code).
-      if (rippleEditMode) {
-        const updatedIndices = selectedClipIndices
-          .filter((i) => i !== index)
-          .map((i) => (i > index ? i - 1 : i));
-        setSelectedClipIndices(updatedIndices);
-      }
+      // Selection must shift on every delete, not just in ripple mode:
+      // indices above the removed one all move down by one, so leaving them
+      // untouched silently repoints the Properties panel at a different clip.
+      const updatedIndices = selectedClipIndices
+        .filter((i) => i !== index)
+        .map((i) => (i > index ? i - 1 : i));
+      setSelectedClipIndices(updatedIndices);
     },
-    [clips, onClipsChange, addToHistory, rippleEditMode, selectedClipIndices, setSelectedClipIndices],
+    [clips, onClipsChange, addToHistory, selectedClipIndices, setSelectedClipIndices],
   );
 
   const handleClipReorder = useCallback(
     (fromIndex: number, toIndex: number) => {
       if (fromIndex === toIndex) return;
 
-      const updatedClips = [...clips];
-      const [movedClip] = updatedClips.splice(fromIndex, 1);
-      updatedClips.splice(toIndex, 0, movedClip);
+      const reordered = [...clips];
+      const [movedClip] = reordered.splice(fromIndex, 1);
+      reordered.splice(toIndex, 0, movedClip);
 
-      // インデックスを更新
-      updatedClips.forEach((clip, index) => {
-        clip.index = index;
-        clip.totalClips = updatedClips.length;
-      });
+      // インデックスを更新（コピーを返すので履歴スナップショットを壊さない）
+      const updatedClips = reindexClips(reordered);
 
       addToHistory(updatedClips);
       onClipsChange(updatedClips);

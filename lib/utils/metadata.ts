@@ -8,6 +8,16 @@ export function getBaseUrl(): string {
   return process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000';
 }
 
+// ロケールプレフィックスは「セグメント境界」で判定する必要がある。
+// 素の /^\/ja/ は '/japan-guide' の 'ja' にも一致してしまい、
+// generateCanonicalUrl('/japan-guide', 'en') が '/pan-guide' を返していた。
+const JA_PREFIX = /^\/ja(?=\/|$)/;
+
+/** パス名が /ja ロケール配下かどうか（'/japan' は false） */
+function hasJaPrefix(pathname: string): boolean {
+  return JA_PREFIX.test(pathname);
+}
+
 /**
  * カノニカルURLを生成
  * @param pathname - パス名（例: '/pricing', '/ja/pricing'）
@@ -30,12 +40,12 @@ export function generateCanonicalUrl(pathname: string, locale: string = 'en'): s
   // 日本語の場合は /ja プレフィックスを追加（ルート以外）
   if (locale === 'ja' && normalizedPath !== '/') {
     // 既に /ja プレフィックスがある場合はそのまま
-    if (!normalizedPath.startsWith('/ja')) {
+    if (!hasJaPrefix(normalizedPath)) {
       normalizedPath = '/ja' + normalizedPath;
     }
   } else if (locale === 'en') {
     // 英語の場合は /ja プレフィックスを削除
-    normalizedPath = normalizedPath.replace(/^\/ja/, '') || '/';
+    normalizedPath = normalizedPath.replace(JA_PREFIX, '') || '/';
   }
   
   return `${baseUrl}${normalizedPath}`;
@@ -47,7 +57,7 @@ export function generateCanonicalUrl(pathname: string, locale: string = 'en'): s
  * @returns ロケールプレフィックスを削除したパス名
  */
 export function removeLocalePrefix(pathname: string): string {
-  return pathname.replace(/^\/ja/, '') || '/';
+  return pathname.replace(JA_PREFIX, '') || '/';
 }
 
 /**
@@ -58,7 +68,7 @@ export function removeLocalePrefix(pathname: string): string {
  */
 export function addLocalePrefix(pathname: string, locale: string): string {
   if (locale === 'ja' && pathname !== '/') {
-    if (!pathname.startsWith('/ja')) {
+    if (!hasJaPrefix(pathname)) {
       return '/ja' + pathname;
     }
   }

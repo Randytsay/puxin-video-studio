@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { NextRequest } from 'next/server';
 
 // Mock the entire Remotion surface. The route's value-add is everything
@@ -41,6 +41,13 @@ beforeEach(() => {
   vi.resetModules();
   vi.clearAllMocks();
   lastCancelSpy.value = null;
+  // These tests drive per-client rate limiting through forwarding headers,
+  // which getClientIp only honours behind a declared trusted proxy.
+  process.env.TRUST_PROXY_HEADERS = '1';
+});
+
+afterEach(() => {
+  delete process.env.TRUST_PROXY_HEADERS;
 });
 
 async function callRender(
@@ -176,18 +183,33 @@ describe('POST /api/render — rate limiting', () => {
     await readNdjson(fresh);
   });
 
-  it('uses the first hop of x-forwarded-for, not x-real-ip, when both present', async () => {
-    const ip = '30.0.0.1';
+  it('uses the last hop of x-forwarded-for, not x-real-ip, when both present', async () => {
+    const nearestProxy = '30.0.0.1';
     for (let i = 0; i < 10; i++) {
       const r = await callRender(validBody, {
-        'x-forwarded-for': `${ip}, 192.168.0.1`,
+        'x-forwarded-for': `192.168.0.1, ${nearestProxy}`,
         'x-real-ip': '99.99.99.99', // would NOT exhaust this bucket
       });
       await readNdjson(r);
     }
-    // 11th from same xff first-hop → blocked
+    // 11th from the same nearest-proxy hop → blocked
     const blocked = await callRender(validBody, {
-      'x-forwarded-for': `${ip}, 192.168.0.1`,
+      'x-forwarded-for': `192.168.0.1, ${nearestProxy}`,
+    });
+    expect(blocked.status).toBe(429);
+  });
+
+  it('cannot be escaped by varying the client-supplied leading hop', async () => {
+    const nearestProxy = '30.0.0.2';
+    for (let i = 0; i < 10; i++) {
+      const r = await callRender(validBody, {
+        'x-forwarded-for': `10.0.0.${i}, ${nearestProxy}`,
+      });
+      await readNdjson(r);
+    }
+    // A fresh spoofed leading hop must NOT mint a new bucket.
+    const blocked = await callRender(validBody, {
+      'x-forwarded-for': `10.0.0.99, ${nearestProxy}`,
     });
     expect(blocked.status).toBe(429);
   });

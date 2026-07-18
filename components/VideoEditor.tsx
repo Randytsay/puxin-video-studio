@@ -13,12 +13,15 @@ import { useEditorStore } from '@/lib/editorStore';
 import { SUBTITLE_PRESETS, AVAILABLE_FONTS, applyPresetToSubtitle } from '@/lib/subtitlePresets';
 import { BGM_LIBRARY, getBgmByGenre, getGenres, BgmTrack } from '@/lib/bgmLibrary';
 import { useUrlConverter } from '@/lib/hooks/useUrlConverter';
+import { reindexClips } from '@/lib/utils/clips';
+import { computeTotalFrames, VIDEO_FPS } from '@/src/timeline';
 import { TOUR_TARGETS } from '@/lib/onboardingTargets';
 import { Onboarding } from './Onboarding';
 import { ToolButton } from './editor/ToolButton';
 import { MediaUploadButton } from './editor/MediaUploadButton';
 import { ModernTimeline } from './editor/ModernTimeline';
 import { SidePanelsContainer } from './editor/SidePanelsContainer';
+import { SubtitlePreviewOverlay } from './editor/SubtitlePreviewOverlay';
 import { useKeyboardShortcuts } from './editor/hooks/useKeyboardShortcuts';
 import { useClipHandlers } from './editor/hooks/useClipHandlers';
 import { useSubtitleHandlers } from './editor/hooks/useSubtitleHandlers';
@@ -210,10 +213,12 @@ export function VideoEditor({
   useEffect(() => {
     debug('[VideoEditor] clips changed, updating state...');
     
-    // 総時間を計算（プレビューとタイムラインの両方で使用）
+    // 総時間を計算（プレビューとタイムラインの両方で使用）。
+    // フレーム数は src/timeline.ts から導出し、Remotion 側の
+    // コンポジション長と必ず一致させる。
     const total = clips.reduce((sum, c) => sum + (c.duration || 3), 0);
-    const durationInFrames = Math.max(1, Math.ceil(total * 30));
-    const calculatedDuration = durationInFrames / 30;
+    const durationInFrames = Math.max(1, computeTotalFrames(clips, VIDEO_FPS));
+    const calculatedDuration = durationInFrames / VIDEO_FPS;
     
     // プレビューの長さを更新（clipsから直接計算、Playerから取得しない）
     setPreviewDuration(calculatedDuration);
@@ -1110,35 +1115,31 @@ export function VideoEditor({
         }
 
         const currentFrame = playerRef.current.getCurrentFrame();
-        const playerTime = currentFrame / 30; // フレームを秒に変換
+        const playerTime = currentFrame / VIDEO_FPS; // フレームを秒に変換
 
-        // BGMの開始位置に達していない場合は停止
-        if (playerTime < bgmStartTime) {
-          if (!bgmAudio.paused) {
-            bgmAudio.pause();
-          }
-          if (bgmAudio.currentTime !== 0) {
-            bgmAudio.currentTime = 0;
-          }
-          return;
-        }
+        // bgmStartTime / bgmEndTime は「BGMファイル内」のトリム区間を表す
+        // （src/ProductVideo.tsx の <Audio startFrom endAt loop> と同じ意味）。
+        // BGM は動画の先頭から鳴り、ファイルの [bgmStartTime, bgmEndTime] を
+        // 繰り返し再生する。
+        //
+        // 以前のプレビューはこれを「タイムライン上の開始位置」として扱って
+        // おり、トリム開始を10秒にすると冒頭10秒が無音になったうえ、その後
+        // ファイルを0秒（＝カットしたはずのイントロ）から再生していた。
+        // 書き出し結果と正反対の挙動になっていたので、レンダラ側に合わせる。
+        const trimStart = Math.max(0, bgmStartTime);
+        // 終了位置未指定なら「ファイル末尾まで」。レンダラ側も loop 付きなので、
+        // 区間が動画より短ければどちらも繰り返す。
+        const fileDuration = Number.isFinite(bgmAudio.duration) ? bgmAudio.duration : null;
+        const rawEnd = bgmEndTime !== null ? bgmEndTime : fileDuration;
+        const trimEnd = rawEnd !== null && rawEnd > trimStart ? rawEnd : null;
+        const trimLength = trimEnd !== null ? trimEnd - trimStart : null;
 
-        // BGMの終了位置をチェック
-        if (bgmEndTime !== null && playerTime >= bgmEndTime) {
-          if (!bgmAudio.paused) {
-            bgmAudio.pause();
-          }
-          // BGMファイル内の終了位置に設定
-          const bgmFileEndTime = bgmEndTime - bgmStartTime;
-          if (Math.abs(bgmAudio.currentTime - bgmFileEndTime) > 0.01) {
-            bgmAudio.currentTime = bgmFileEndTime;
-          }
-          return;
-        }
-
-        // BGMファイル内の再生位置を計算（動画の再生位置からBGM開始位置を引く）
-        const bgmFileTime = playerTime - bgmStartTime;
-        const targetTime = Math.max(0, bgmFileTime);
+        // トリム区間内での再生位置。区間長を超えたぶんは剰余でループさせる。
+        const offsetInTrim =
+          trimLength !== null && trimLength > 0
+            ? playerTime % trimLength
+            : playerTime;
+        const targetTime = trimStart + offsetInTrim;
 
         // 動画の再生位置に合わせてBGMを同期
         if (isPlaying) {
@@ -1285,46 +1286,26 @@ export function VideoEditor({
     }
   }, [selectedClipIndices]);
 
-  // clipsが変更されたときに、現在の再生位置を調整し、Playerを更新
+  // clipsが変更されたときに Remotion Player の再生位置を追従させる。
+  //
+  // 再生位置のクランプと選択インデックスの再調整は、上の「clipsが変更された時の
+  // 処理を統合」エフェクトが同じ clips 依存で既に行っている。以前はここにも同じ
+  // 処理が丸ごと複製されており、二重に setState を走らせていた。
   useEffect(() => {
-    // currentTimeRefを使用して最新の値を参照
-    const currentTimeValue = currentTimeRef.current;
-    
-    // 現在の再生位置がtotalDurationを超えている場合、調整
-    if (currentTimeValue > totalDuration && totalDuration > 0) {
-      const newTime = Math.max(0, totalDuration - 0.1);
-      updateCurrentTime(newTime, true);
-    }
+    if (videoUrl || !playerRef.current || clips.length === 0) return;
 
-    // 選択中のクリップインデックスが無効になった場合、調整
-    const validIndices = selectedClipIndices.filter(index => index < clips.length);
-    if (validIndices.length !== selectedClipIndices.length) {
-      if (validIndices.length > 0) {
-        setSelectedClipIndices(validIndices);
-      } else if (clips.length > 0) {
-        setSelectedClipIndices([clips.length - 1]);
-      } else {
-        setSelectedClipIndices([]);
+    // Playerの再レンダリングを促すために、現在のフレームを再設定
+    try {
+      const currentFrame = playerRef.current.getCurrentFrame();
+      const maxFrame = Math.ceil(totalDuration * 30);
+      if (currentFrame >= maxFrame && maxFrame > 0) {
+        const newTime = Math.max(0, (maxFrame - 1) / 30);
+        updateCurrentTime(newTime, true);
       }
+    } catch {
+      // エラーは無視（Playerがまだ準備できていない可能性がある）
     }
-
-    // Remotion Playerの再生位置を調整（keyプロパティの変更によりPlayerが再マウントされるため、ここでは再生位置の調整のみ行う）
-    if (!videoUrl && playerRef.current && clips.length > 0) {
-      // Playerの再レンダリングを促すために、現在のフレームを再設定
-      try {
-        const currentFrame = playerRef.current.getCurrentFrame();
-        const maxFrame = Math.ceil(totalDuration * 30);
-        if (currentFrame >= maxFrame && maxFrame > 0) {
-          const newTime = Math.max(0, (maxFrame - 1) / 30);
-          updateCurrentTime(newTime, true);
-        }
-        // clipsが変更されたときは、最初のフレームに戻す（オプション）
-        // playerRef.current.seekTo(0);
-      } catch (error) {
-        // エラーは無視（Playerがまだ準備できていない可能性がある）
-      }
-    }
-  }, [clips, totalDuration, selectedClipIndices, videoUrl, updateCurrentTime]); // currentTimeを依存配列から削除
+  }, [clips, totalDuration, videoUrl, updateCurrentTime]);
 
   // 埋め込まれた字幕を無効化するヘルパー関数
   const disableEmbeddedSubtitles = useCallback(() => {
@@ -1422,7 +1403,6 @@ export function VideoEditor({
   } = useClipHandlers({
     clips,
     onClipsChange,
-    rippleEditMode,
     copiedClip,
     setCopiedClip,
   });
@@ -1682,10 +1662,7 @@ export function VideoEditor({
       });
       
       // インデックスを更新
-      updatedClips.forEach((c, index) => {
-        c.index = index;
-        c.totalClips = updatedClips.length;
-      });
+      updatedClips = reindexClips(updatedClips);
       
       addToHistory(updatedClips);
       onClipsChange(updatedClips);
@@ -1908,15 +1885,12 @@ export function VideoEditor({
       audioStartTime: originalAudioStartTime + cutPosition, // 2つ目の部分はカット位置から開始
     };
     
-    const updatedClips = [...clips];
+    let updatedClips = [...clips];
     updatedClips[selectedClipIndex] = firstPart;
     updatedClips.splice(selectedClipIndex + 1, 0, secondPart);
     
     // インデックスを更新
-    updatedClips.forEach((c, index) => {
-      c.index = index;
-      c.totalClips = updatedClips.length;
-    });
+    updatedClips = reindexClips(updatedClips);
     
     addToHistory(updatedClips);
     onClipsChange(updatedClips);
@@ -1958,7 +1932,7 @@ export function VideoEditor({
     
     // 現在位置からクリップの開始位置までを削除（クリップの開始位置を現在位置に変更）
     if (cutPosition > 0 && cutPosition < targetDuration) {
-      const updatedClips = [...clips];
+      let updatedClips = [...clips];
       const newDuration = targetDuration - cutPosition;
       const originalAudioStartTime = targetClip.audioStartTime || 0;
       
@@ -1969,10 +1943,7 @@ export function VideoEditor({
       };
       
       // インデックスを更新
-      updatedClips.forEach((c, index) => {
-        c.index = index;
-        c.totalClips = updatedClips.length;
-      });
+      updatedClips = reindexClips(updatedClips);
       
       addToHistory(updatedClips);
       onClipsChange(updatedClips);
@@ -1988,7 +1959,7 @@ export function VideoEditor({
       
       if (currentTime > prevEndTime) {
         // 前のクリップと現在のクリップの間をカット
-        const updatedClips = [...clips];
+        let updatedClips = [...clips];
         const gapDuration = currentTime - prevEndTime;
         const newDuration = prevDuration + gapDuration;
         
@@ -2014,10 +1985,7 @@ export function VideoEditor({
         }
         
         // インデックスを更新
-        updatedClips.forEach((c, index) => {
-          c.index = index;
-          c.totalClips = updatedClips.length;
-        });
+        updatedClips = reindexClips(updatedClips);
         
         addToHistory(updatedClips);
         onClipsChange(updatedClips);
@@ -2057,7 +2025,7 @@ export function VideoEditor({
     
     // 現在位置からクリップの終了位置までを削除（クリップの終了位置を現在位置に変更）
     if (cutPosition > 0 && cutPosition < targetDuration) {
-      const updatedClips = [...clips];
+      let updatedClips = [...clips];
       const newDuration = cutPosition;
       const originalAudioStartTime = targetClip.audioStartTime || 0;
       
@@ -2069,10 +2037,7 @@ export function VideoEditor({
       };
       
       // インデックスを更新
-      updatedClips.forEach((c, index) => {
-        c.index = index;
-        c.totalClips = updatedClips.length;
-      });
+      updatedClips = reindexClips(updatedClips);
       
       addToHistory(updatedClips);
       onClipsChange(updatedClips);
@@ -2087,7 +2052,7 @@ export function VideoEditor({
       
       if (currentTime < nextStartTime) {
         // 現在のクリップと次のクリップの間をカット
-        const updatedClips = [...clips];
+        let updatedClips = [...clips];
         const gapDuration = nextStartTime - currentTime;
         const newDuration = targetDuration - gapDuration;
         
@@ -2119,10 +2084,7 @@ export function VideoEditor({
         }
         
         // インデックスを更新
-        updatedClips.forEach((c, index) => {
-          c.index = index;
-          c.totalClips = updatedClips.length;
-        });
+        updatedClips = reindexClips(updatedClips);
         
         addToHistory(updatedClips);
         onClipsChange(updatedClips);
@@ -2390,12 +2352,10 @@ export function VideoEditor({
                 src={convertedBgmUrl || bgmUrl}
                 preload="auto"
                 style={{ display: 'none' }}
-                onEnded={() => {
-                  // BGMが終了した場合の処理（必要に応じて）
-                  if (bgmAudioRef.current && bgmEndTime !== null) {
-                    // ループ再生する場合はここで処理
-                  }
-                }}
+                // レンダラ側の <Audio loop /> に合わせる。通常は同期ループが
+                // トリム区間の末尾で巻き戻すが、同期の隙間でファイル末尾に
+                // 達しても止まらないようにする保険。
+                loop
               />
             )}
             <div 
@@ -2518,189 +2478,11 @@ export function VideoEditor({
                   >
                     {t('preview.browserUnsupported')}
                   </video>
-                  {/* 字幕オーバーレイ（HTML5 video用） */}
-                  {/* 完成動画（videoUrl）が存在する場合、字幕は既に動画に埋め込まれているため、オーバーレイを表示しない */}
-                  {!videoUrl && subtitles && subtitles.length > 0 && (
-                    <div 
-                      className={`absolute inset-0 z-20 ${selectedSubtitleId ? 'pointer-events-auto' : 'pointer-events-none'}`}
-                      style={{
-                        width: `${calculatePreviewSize.width}px`,
-                        height: `${calculatePreviewSize.height}px`,
-                      }}
-                    >
-                      {(() => {
-                        const activeSubtitle = subtitles.find(
-                          (subtitle) => currentTime >= subtitle.startTime && currentTime < subtitle.endTime
-                        );
-                        if (!activeSubtitle) return null;
-                        
-                        const isSelected = selectedSubtitleId === activeSubtitle.id;
-                        const isEditing = editingSubtitleText === activeSubtitle.id;
-                        
-                        // プレビューエリアの実際のサイズを取得（calculatePreviewSizeを使用）
-                        const previewWidth = calculatePreviewSize.width;
-                        const previewHeight = calculatePreviewSize.height;
-                        
-                        // 位置の計算（パーセンテージベース）
-                        let positionY: number;
-                        let positionX: number;
-                        
-                        if (activeSubtitle.positionYPercent !== undefined) {
-                          // パーセンテージベースの位置指定（上から）
-                          // 10%の余白を確保（最小10%、最大90%）
-                          const clampedYPercent = Math.max(10, Math.min(90, activeSubtitle.positionYPercent));
-                          positionY = (clampedYPercent / 100) * previewHeight;
-                        } else {
-                          // 従来のposition指定（後方互換性）
-                          const position = activeSubtitle.position || 'bottom';
-                          if (position === 'top') {
-                            positionY = 0.1 * previewHeight; // 上から10%
-                          } else if (position === 'center') {
-                            positionY = 0.5 * previewHeight; // 中央
-                          } else {
-                            positionY = 0.9 * previewHeight; // 下から10%（上から90%）
-                          }
-                        }
-                        
-                        if (activeSubtitle.positionXPercent !== undefined) {
-                          // パーセンテージベースの位置指定（左から）
-                          // 10%の余白を確保（最小10%、最大90%）
-                          const clampedXPercent = Math.max(10, Math.min(90, activeSubtitle.positionXPercent));
-                          positionX = (clampedXPercent / 100) * previewWidth;
-                        } else {
-                          // 従来のalign指定（後方互換性）
-                          const align = activeSubtitle.align || 'center';
-                          if (align === 'left') {
-                            positionX = 0.1 * previewWidth; // 左から10%
-                          } else if (align === 'center') {
-                            positionX = 0.5 * previewWidth; // 中央
-                          } else {
-                            positionX = 0.9 * previewWidth; // 右から10%（左から90%）
-                          }
-                        }
-                        
-                        // フォントサイズの計算（パーセンテージベース）
-                        let fontSizePx: number;
-                        if (activeSubtitle.fontSizePercent !== undefined) {
-                          // パーセンテージベースのフォントサイズ（プレビュー高さに対する%）
-                          fontSizePx = (activeSubtitle.fontSizePercent / 100) * previewHeight;
-                        } else {
-                          // 従来のfontSize（ピクセル値、後方互換性）
-                          // 既存データとの互換性のため、fontSizeが100以下の場合はパーセンテージとして扱う
-                          // 100より大きい場合はピクセル値として扱う
-                          if (activeSubtitle.fontSize <= 100) {
-                            fontSizePx = (activeSubtitle.fontSize / 100) * previewHeight;
-                          } else {
-                            fontSizePx = activeSubtitle.fontSize;
-                          }
-                        }
-                        
-                        // alignの取得（後方互換性のため）
-                        const align = activeSubtitle.align || 'center';
-                        
-                        return (
-                          <div
-                            className="w-full h-full relative"
-                            style={{
-                              position: 'relative',
-                            }}
-                          >
-                            <div
-                              onMouseDown={(e) => handleSubtitlePreviewDragStart(e, activeSubtitle)}
-                              onDoubleClick={(e) => {
-                                e.stopPropagation();
-                                if (isSelected) {
-                                  setEditingSubtitleText(activeSubtitle.id);
-                                }
-                              }}
-                              className={isSelected ? 'cursor-move' : ''}
-                              style={{
-                                background: (activeSubtitle.backgroundColor && activeSubtitle.backgroundColor.trim() !== '' && activeSubtitle.backgroundColor.toLowerCase() !== 'transparent') 
-                                  ? activeSubtitle.backgroundColor 
-                                  : 'transparent',
-                                backdropFilter: 'none', // 背景色の有無に関わらずブラーなし
-                                padding: '16px 24px',
-                                borderRadius: '12px',
-                                maxWidth: '90%',
-                                textAlign: align,
-                                boxShadow: (activeSubtitle.backgroundColor && activeSubtitle.backgroundColor.trim() !== '' && activeSubtitle.backgroundColor.toLowerCase() !== 'transparent') 
-                                  ? '0 4px 20px rgba(0, 0, 0, 0.5)' 
-                                  : 'none',
-                                border: isSelected 
-                                  ? '2px solid rgba(255, 215, 0, 0.6)' 
-                                  : (activeSubtitle.backgroundColor && activeSubtitle.backgroundColor.trim() !== '' && activeSubtitle.backgroundColor.toLowerCase() !== 'transparent') 
-                                  ? '1px solid rgba(255, 255, 255, 0.1)' 
-                                  : 'none',
-                                display: 'inline-block',
-                                outline: isSelected ? '2px solid rgba(255, 215, 0, 0.3)' : 'none',
-                                outlineOffset: '2px',
-                              }}
-                            >
-                              {isEditing ? (
-                                <input
-                                  ref={(el) => {
-                                    subtitleTextInputRef.current = el;
-                                    if (el) {
-                                      el.focus();
-                                      el.select();
-                                    }
-                                  }}
-                                  type="text"
-                                  value={activeSubtitle.text}
-                                  onChange={(e) => handleSubtitleEdit(activeSubtitle.id, { text: e.target.value })}
-                                  onBlur={() => setEditingSubtitleText(null)}
-                                  onKeyDown={(e) => {
-                                    if (e.key === 'Enter') {
-                                      e.preventDefault();
-                                      setEditingSubtitleText(null);
-                                    } else if (e.key === 'Escape') {
-                                      e.preventDefault();
-                                      setEditingSubtitleText(null);
-                                    }
-                                  }}
-                                  style={{
-                                    color: activeSubtitle.color || '#FFFFFF',
-                                    fontSize: `${fontSizePx}px`,
-                                    fontFamily: activeSubtitle.fontFamily || 'Noto Sans JP', // 選択されたフォントを使用
-                                    fontWeight: 600,
-                                    background: 'transparent',
-                                    border: '2px solid rgba(255, 215, 0, 0.8)',
-                                    borderRadius: '4px',
-                                    padding: '4px 8px',
-                                    width: '100%',
-                                    minWidth: '200px',
-                                    outline: 'none',
-                                  }}
-                                />
-                              ) : (
-                                <p
-                                  style={{
-                                    color: activeSubtitle.color || '#FFFFFF',
-                                    fontSize: `${fontSizePx}px`,
-                                    fontFamily: activeSubtitle.fontFamily || 'system-ui, -apple-system, sans-serif', // 実際の字幕と同じフォント
-                                    fontWeight: activeSubtitle.fontWeight || 600, // 実際の字幕と同じfontWeight
-                                    margin: 0,
-                                    lineHeight: activeSubtitle.lineHeight || 1.4, // 実際の字幕と同じlineHeight
-                                    letterSpacing: activeSubtitle.letterSpacing || 'normal', // 実際の字幕と同じletterSpacing
-                                    textTransform: activeSubtitle.textTransform || 'none', // 実際の字幕と同じtextTransform
-                                    textShadow: activeSubtitle.textShadow !== undefined 
-                                      ? activeSubtitle.textShadow 
-                                      : '0 2px 10px rgba(0, 0, 0, 0.8)', // 実際の字幕と同じtextShadow
-                                    ...(activeSubtitle.borderWidth && activeSubtitle.borderWidth > 0 && activeSubtitle.borderColor ? {
-                                      WebkitTextStroke: `${activeSubtitle.borderWidth}px ${activeSubtitle.borderColor}`,
-                                      paintOrder: 'stroke fill',
-                                    } : {}), // 実際の字幕と同じ文字の縁取り
-                                  }}
-                                >
-                                  {activeSubtitle.text}
-                                </p>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })()}
-                    </div>
-                  )}
+                  {/* 完成動画（videoUrl）が存在する場合、字幕は既に動画へ焼き込まれて
+                      いるため、ここにオーバーレイは出さない。以前はこの位置に編集用
+                      オーバーレイが丸ごと複製されていたが、`!videoUrl` という自身の
+                      ガードが `videoUrl ?` の真枝と矛盾するため一度も描画されず、
+                      Player 側の実装からも取り残されて古くなっていた。 */}
                 </>
               ) : (
                 // 編集モード: Remotion Playerでプレビュー
@@ -2772,205 +2554,17 @@ export function VideoEditor({
                       <div className="text-gray-400 text-sm">{t('preview.updating')}</div>
                     </div>
                   )}
-                  {/* 字幕オーバーレイ（Remotion Player用） */}
-                  {subtitles && subtitles.length > 0 && (
-                    <div 
-                      className={`absolute z-20 ${selectedSubtitleId ? 'pointer-events-auto' : 'pointer-events-none'}`}
-                      style={{
-                        width: `${calculatePreviewSize.width}px`,
-                        height: `${calculatePreviewSize.height}px`,
-                        top: '50%',
-                        left: '50%',
-                        transform: 'translate(-50%, -50%)',
-                      }}
-                    >
-                      {(() => {
-                        const activeSubtitle = subtitles.find(
-                          (subtitle) => currentTime >= subtitle.startTime && currentTime < subtitle.endTime
-                        );
-                        if (!activeSubtitle) return null;
-                        
-                        const isSelected = selectedSubtitleId === activeSubtitle.id;
-                        const isEditing = editingSubtitleText === activeSubtitle.id;
-                        
-                        // プレビューエリアの実際のサイズを取得（calculatePreviewSizeを使用）
-                        const previewWidth = calculatePreviewSize.width;
-                        const previewHeight = calculatePreviewSize.height;
-                        
-                        // 位置の計算（パーセンテージベース）
-                        let positionY: number;
-                        let positionX: number;
-                        
-                        if (activeSubtitle.positionYPercent !== undefined) {
-                          // パーセンテージベースの位置指定（上から）
-                          // 10%の余白を確保（最小10%、最大90%）
-                          const clampedYPercent = Math.max(10, Math.min(90, activeSubtitle.positionYPercent));
-                          positionY = (clampedYPercent / 100) * previewHeight;
-                        } else {
-                          // 従来のposition指定（後方互換性）
-                          const position = activeSubtitle.position || 'bottom';
-                          if (position === 'top') {
-                            positionY = 0.1 * previewHeight; // 上から10%
-                          } else if (position === 'center') {
-                            positionY = 0.5 * previewHeight; // 中央
-                          } else {
-                            positionY = 0.9 * previewHeight; // 下から10%（上から90%）
-                          }
-                        }
-                        
-                        if (activeSubtitle.positionXPercent !== undefined) {
-                          // パーセンテージベースの位置指定（左から）
-                          // 10%の余白を確保（最小10%、最大90%）
-                          const clampedXPercent = Math.max(10, Math.min(90, activeSubtitle.positionXPercent));
-                          positionX = (clampedXPercent / 100) * previewWidth;
-                        } else {
-                          // 従来のalign指定（後方互換性）
-                          const align = activeSubtitle.align || 'center';
-                          if (align === 'left') {
-                            positionX = 0.1 * previewWidth; // 左から10%
-                          } else if (align === 'center') {
-                            positionX = 0.5 * previewWidth; // 中央
-                          } else {
-                            positionX = 0.9 * previewWidth; // 右から10%（左から90%）
-                          }
-                        }
-                        
-                        // フォントサイズの計算（パーセンテージベース）
-                        let fontSizePx: number;
-                        if (activeSubtitle.fontSizePercent !== undefined) {
-                          // パーセンテージベースのフォントサイズ（プレビュー高さに対する%）
-                          fontSizePx = (activeSubtitle.fontSizePercent / 100) * previewHeight;
-                        } else {
-                          // 従来のfontSize（ピクセル値、後方互換性）
-                          // 既存データとの互換性のため、fontSizeが100以下の場合はパーセンテージとして扱う
-                          // 100より大きい場合はピクセル値として扱う
-                          if (activeSubtitle.fontSize <= 100) {
-                            fontSizePx = (activeSubtitle.fontSize / 100) * previewHeight;
-                          } else {
-                            fontSizePx = activeSubtitle.fontSize;
-                          }
-                        }
-                        
-                        // alignの取得（後方互換性のため）
-                        const align = activeSubtitle.align || 'center';
-                        
-                        return (
-                          <div
-                            className="w-full h-full relative"
-                            style={{
-                              position: 'relative',
-                            }}
-                          >
-                            <div
-                              onMouseDown={(e) => handleSubtitlePreviewDragStart(e, activeSubtitle)}
-                              onDoubleClick={(e) => {
-                                e.stopPropagation();
-                                if (isSelected) {
-                                  setEditingSubtitleText(activeSubtitle.id);
-                                }
-                              }}
-                              className={isSelected ? 'cursor-move' : ''}
-                              style={{
-                                position: 'absolute',
-                                top: `${positionY}px`,
-                                left: `${positionX}px`,
-                                transform: 'translate(-50%, -50%)', // 中央揃え
-                                background: (activeSubtitle.backgroundColor && activeSubtitle.backgroundColor.trim() !== '' && activeSubtitle.backgroundColor.toLowerCase() !== 'transparent') 
-                                  ? activeSubtitle.backgroundColor 
-                                  : 'transparent',
-                                backdropFilter: 'none', // 背景色の有無に関わらずブラーなし
-                                padding: '16px 24px',
-                                borderRadius: '12px',
-                                maxWidth: '90%',
-                                textAlign: align,
-                                boxShadow: (activeSubtitle.backgroundColor && activeSubtitle.backgroundColor.trim() !== '' && activeSubtitle.backgroundColor.toLowerCase() !== 'transparent') 
-                                  ? '0 4px 20px rgba(0, 0, 0, 0.5)' 
-                                  : 'none',
-                                border: isSelected 
-                                  ? '2px solid rgba(255, 215, 0, 0.6)' 
-                                  : (activeSubtitle.backgroundColor && activeSubtitle.backgroundColor.trim() !== '' && activeSubtitle.backgroundColor.toLowerCase() !== 'transparent') 
-                                  ? '1px solid rgba(255, 255, 255, 0.1)' 
-                                  : 'none',
-                                display: 'inline-block',
-                                outline: isSelected ? '2px solid rgba(255, 215, 0, 0.3)' : 'none',
-                                outlineOffset: '2px',
-                              }}
-                            >
-                              {isEditing ? (
-                                <input
-                                  ref={(el) => {
-                                    subtitleTextInputRef.current = el;
-                                    if (el) {
-                                      el.focus();
-                                      el.select();
-                                    }
-                                  }}
-                                  type="text"
-                                  value={activeSubtitle.text}
-                                  onChange={(e) => handleSubtitleEdit(activeSubtitle.id, { text: e.target.value })}
-                                  onBlur={() => setEditingSubtitleText(null)}
-                                  onKeyDown={(e) => {
-                                    if (e.key === 'Enter') {
-                                      e.preventDefault();
-                                      setEditingSubtitleText(null);
-                                    } else if (e.key === 'Escape') {
-                                      e.preventDefault();
-                                      setEditingSubtitleText(null);
-                                    }
-                                  }}
-                                  style={{
-                                    color: activeSubtitle.color || '#FFFFFF',
-                                    fontSize: `${fontSizePx}px`,
-                                    fontFamily: activeSubtitle.fontFamily || 'system-ui, -apple-system, sans-serif', // 実際の字幕と同じフォント
-                                    fontWeight: activeSubtitle.fontWeight || 600, // 実際の字幕と同じfontWeight
-                                    background: 'transparent',
-                                    border: '2px solid rgba(255, 215, 0, 0.8)',
-                                    borderRadius: '4px',
-                                    padding: '4px 8px',
-                                    width: '100%',
-                                    minWidth: '200px',
-                                    outline: 'none',
-                                    lineHeight: activeSubtitle.lineHeight || 1.4, // 実際の字幕と同じlineHeight
-                                    letterSpacing: activeSubtitle.letterSpacing || 'normal', // 実際の字幕と同じletterSpacing
-                                    textTransform: activeSubtitle.textTransform || 'none', // 実際の字幕と同じtextTransform
-                                    textShadow: activeSubtitle.textShadow !== undefined 
-                                      ? activeSubtitle.textShadow 
-                                      : '0 2px 10px rgba(0, 0, 0, 0.8)', // 実際の字幕と同じtextShadow
-                                    ...(activeSubtitle.borderWidth && activeSubtitle.borderWidth > 0 && activeSubtitle.borderColor ? {
-                                      WebkitTextStroke: `${activeSubtitle.borderWidth}px ${activeSubtitle.borderColor}`,
-                                      paintOrder: 'stroke fill',
-                                    } : {}), // 実際の字幕と同じ文字の縁取り
-                                  }}
-                                />
-                              ) : (
-                                <p
-                                  style={{
-                                    color: activeSubtitle.color || '#FFFFFF',
-                                    fontSize: `${fontSizePx}px`,
-                                    fontFamily: activeSubtitle.fontFamily || 'system-ui, -apple-system, sans-serif', // 実際の字幕と同じフォント
-                                    fontWeight: activeSubtitle.fontWeight || 600, // 実際の字幕と同じfontWeight
-                                    margin: 0,
-                                    lineHeight: activeSubtitle.lineHeight || 1.4, // 実際の字幕と同じlineHeight
-                                    letterSpacing: activeSubtitle.letterSpacing || 'normal', // 実際の字幕と同じletterSpacing
-                                    textTransform: activeSubtitle.textTransform || 'none', // 実際の字幕と同じtextTransform
-                                    textShadow: activeSubtitle.textShadow !== undefined 
-                                      ? activeSubtitle.textShadow 
-                                      : '0 2px 10px rgba(0, 0, 0, 0.8)', // 実際の字幕と同じtextShadow
-                                    ...(activeSubtitle.borderWidth && activeSubtitle.borderWidth > 0 && activeSubtitle.borderColor ? {
-                                      WebkitTextStroke: `${activeSubtitle.borderWidth}px ${activeSubtitle.borderColor}`,
-                                      paintOrder: 'stroke fill',
-                                    } : {}), // 実際の字幕と同じ文字の縁取り
-                                  }}
-                                >
-                                  {activeSubtitle.text}
-                                </p>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })()}
-                    </div>
-                  )}
+                  <SubtitlePreviewOverlay
+                    subtitles={subtitles}
+                    currentTime={currentTime}
+                    previewSize={calculatePreviewSize}
+                    selectedSubtitleId={selectedSubtitleId}
+                    editingSubtitleText={editingSubtitleText}
+                    setEditingSubtitleText={setEditingSubtitleText}
+                    subtitleTextInputRef={subtitleTextInputRef}
+                    onSubtitleEdit={handleSubtitleEdit}
+                    onSubtitlePreviewDragStart={handleSubtitlePreviewDragStart}
+                  />
                 </>
               )}
             </div>

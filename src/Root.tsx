@@ -4,6 +4,7 @@ import React from 'react';
 import { Composition, registerRoot } from 'remotion';
 import { ProductVideo } from './ProductVideo';
 import { ProductVideoProps, RESOLUTIONS, VideoResolution, VideoAspectRatio } from './types';
+import { computeTotalFrames } from './timeline';
 import type { VideoClip } from './types';
 
 // Remotion's <Composition> is generic over `Props extends Record<string, unknown>`.
@@ -47,13 +48,10 @@ const RemotionRoot: React.FC = () => {
                     durationInFrames: 30, // 最低1秒
                   };
                 }
-                // 各クリップのdurationの合計を計算
-                const totalDuration = typedProps.clips.reduce(
-                  (sum, clip) => sum + (clip.duration || 3.0),
-                  0,
-                );
-                const totalFrames = Math.max(30, Math.ceil(totalDuration * 30)); // 最低1秒
-                debug(`Remotion: 総${totalDuration}秒 = ${totalFrames}フレーム (${resolution}, ${aspectRatio})`);
+                // ProductVideo が <Sequence> を並べるのと同じ関数から導出する。
+                // 別々に丸めると合計がずれ、末尾に黒フレームが残っていた。
+                const totalFrames = Math.max(30, computeTotalFrames(typedProps.clips)); // 最低1秒
+                debug(`Remotion: ${totalFrames}フレーム (${resolution}, ${aspectRatio})`);
                 return {
                   durationInFrames: totalFrames,
                 };

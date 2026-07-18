@@ -48,26 +48,17 @@ export interface Video {
 }
 
 // 動画解像度関連の型定義
-export type VideoResolution = '720p' | '1080p';
-export type VideoAspectRatio = '16:9' | '9:16' | '1:1';
-
-export interface ResolutionConfig {
-  width: number;
-  height: number;
-  label: string;
-}
-
-// アスペクト比ごとの解像度設定
-export const RESOLUTIONS: Record<VideoResolution, Record<VideoAspectRatio, ResolutionConfig>> = {
-  '720p': {
-    '16:9': { width: 1280, height: 720, label: '720p (HD)' },
-    '9:16': { width: 720, height: 1280, label: '720p (Vertical)' },
-    '1:1': { width: 720, height: 720, label: '720p (Square)' },
-  },
-  '1080p': {
-    '16:9': { width: 1920, height: 1080, label: '1080p (Full HD)' },
-    '9:16': { width: 1080, height: 1920, label: '1080p (Vertical)' },
-    '1:1': { width: 1080, height: 1080, label: '1080p (Square)' },
-  },
-};
+//
+// These live in src/types.ts, which the Remotion compositions and every
+// component already import from. This module used to carry a second, parallel
+// definition; the two had already drifted (the 9:16 / 1:1 labels read
+// "Vertical" / "Square" here and "縦型" / "正方形" there), so which string a
+// user saw depended on which module a given file happened to import. Re-export
+// instead of redeclaring so there is exactly one table.
+export type {
+  VideoResolution,
+  VideoAspectRatio,
+  ResolutionConfig,
+} from '@/src/types';
+export { RESOLUTIONS } from '@/src/types';
 

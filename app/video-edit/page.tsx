@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useTranslations } from 'next-intl';
 import { useAppStore } from '@/lib/store';
@@ -26,7 +26,12 @@ export default function VideoEditPage() {
   const tc = useTranslations('common');
   const trp = useTranslations('render');
 
-  const initialClips = useAppStore((s) => s.clips);
+  // The store is the single source of truth for clips. Mirroring it into local
+  // component state (the previous shape) meant every edit stayed local: leaving
+  // the editor and coming back re-seeded from the stale store array and silently
+  // discarded the whole session's work.
+  const clips = useAppStore((s) => s.clips);
+  const setClips = useAppStore((s) => s.setClips);
   const productData = useAppStore((s) => s.productData);
   const videoResolution = useAppStore((s) => s.videoResolution);
   const videoAspectRatio = useAppStore((s) => s.videoAspectRatio);
@@ -40,7 +45,6 @@ export default function VideoEditPage() {
   const setVideoUrl = useAppStore((s) => s.setVideoUrl);
 
   const [mounted, setMounted] = useState(false);
-  const [clips, setClips] = useState<VideoClip[]>(initialClips);
   const [subtitles, setSubtitles] = useState<Subtitle[]>([]);
   const [rendering, setRendering] = useState(false);
   const [renderStatus, setRenderStatus] = useState<RenderStatus>({
@@ -56,11 +60,17 @@ export default function VideoEditPage() {
     setMounted(true);
   }, []);
 
+  // Whether the store already held clips when this page first mounted. Captured
+  // once, because `clips` is now live store state: keying the redirect off its
+  // current length would eject the user to the landing page the moment they
+  // deleted their last clip mid-edit.
+  const hadClipsOnMount = useRef(clips.length > 0);
+
   useEffect(() => {
-    if (mounted && initialClips.length === 0) {
+    if (mounted && !hadClipsOnMount.current) {
       router.replace('/');
     }
-  }, [mounted, initialClips, router]);
+  }, [mounted, router]);
 
   const handleExport = async (exportResolution: VideoResolution) => {
     setRendering(true);
@@ -175,7 +185,7 @@ export default function VideoEditPage() {
     );
   }
 
-  if (initialClips.length === 0) {
+  if (!hadClipsOnMount.current) {
     return null;
   }
 

@@ -325,9 +325,6 @@
     "emptyMessage": "このシーンの内容がまだ生成されていません",
     "generateContent": "内容を生成"
   },
-  "thumbnail": {
-    "defaultAlt": "Video thumbnail"
-  },
   "render": {
     "preparing": "準備中…",
     "done": "ダウンロードを準備中…",

@@ -14,6 +14,15 @@ import { useTranslations } from 'next-intl';
 import { useEditorStore } from '@/lib/editorStore';
 import type { VideoClip, Subtitle } from '@/src/types';
 
+/**
+ * True when the key press carries a command-style modifier, i.e. it belongs to
+ * the browser/OS rather than to a bare-key editor shortcut. Shift is excluded
+ * on purpose — it only selects the uppercase variant of the same binding.
+ */
+function hasCommandModifier(e: KeyboardEvent): boolean {
+  return e.ctrlKey || e.metaKey || e.altKey;
+}
+
 export interface KeyboardShortcutHandlers {
   // Playback / time
   onPlayPause: () => void;
@@ -172,8 +181,13 @@ export function useKeyboardShortcuts(
           }
           break;
 
+        // s / a / d は「修飾キーなし」の編集ショートカット。修飾キー付きは
+        // ブラウザ標準（⌘S=保存, ⌘A=全選択, ⌘D=ブックマーク）に譲る。
+        // 以前はガードが無く、⌘S で保存が抑止された上にクリップが分割され、
+        // ⌘A で onClipCutToPrevious が走ってクリップが削られていた。
         case 's':
         case 'S':
+          if (hasCommandModifier(e)) break;
           e.preventDefault();
           if (selectedSubtitleIds.length > 0) {
             handlers.onSubtitleCut();
@@ -186,12 +200,14 @@ export function useKeyboardShortcuts(
 
         case 'a':
         case 'A':
+          if (hasCommandModifier(e)) break;
           e.preventDefault();
           handlers.onClipCutToPrevious();
           break;
 
         case 'd':
         case 'D':
+          if (hasCommandModifier(e)) break;
           e.preventDefault();
           handlers.onClipCutToNext();
           break;

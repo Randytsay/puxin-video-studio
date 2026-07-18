@@ -325,9 +325,6 @@
     "emptyMessage": "No content has been generated for this scene yet",
     "generateContent": "Generate content"
   },
-  "thumbnail": {
-    "defaultAlt": "Video thumbnail"
-  },
   "render": {
     "preparing": "Preparing…",
     "done": "Finalizing download…",
