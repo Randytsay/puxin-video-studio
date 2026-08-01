@@ -8,6 +8,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useTranslations } from 'next-intl';
 import { debug, logError } from '@/lib/utils/logger.client';
+import { uploadFile } from '@/lib/utils/uploadFile';
 import { getBgmByGenre, getGenres, type BgmTrack } from '@/lib/bgmLibrary';
 
 export interface BgmSettingsProps {
@@ -15,7 +16,6 @@ export interface BgmSettingsProps {
   bgmVolume: number;
   bgmStartTime: number; // BGMの開始位置（秒）
   bgmEndTime: number | null; // BGMの終了位置（秒、nullの場合は最後まで）
-  bgmEnabled: boolean;
   subtitleAudioEnabled: boolean;
   subtitleAudioVolume: number; // 字幕読み上げの音量
   onBgmUrlChange: (url: string | null) => void;
@@ -32,7 +32,6 @@ export function BgmSettings({
   bgmVolume,
   bgmStartTime,
   bgmEndTime,
-  bgmEnabled: _bgmEnabled,
   subtitleAudioEnabled,
   subtitleAudioVolume,
   onBgmUrlChange,
@@ -106,24 +105,16 @@ export function BgmSettings({
   }, [bgmUrl, previewBgmId, bgmLibrary]);
 
   const handleBgmUpload = async (file: File) => {
-    const formData = new FormData();
-    formData.append('file', file);
-
     try {
-      const response = await fetch('/api/upload', { method: 'POST', body: formData });
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ error: 'Upload failed' }));
-        throw new Error(errorData.error || 'BGM upload failed');
-      }
-      const data = await response.json();
-      if (!data.url) throw new Error('No URL returned');
+      // 以前はここだけ英語ハードコードの 'BGM upload failed' を投げていた。
+      const { url } = await uploadFile(file, t('alert.bgmUploadFailed'));
 
       const newTrack: BgmTrack = {
         id: `bgm-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         name: file.name.replace(/\.[^.]+$/, ''),
         description: '',
         genre: 'Uploaded',
-        url: data.url,
+        url,
       };
 
       setBgmLibrary((prev) => {
@@ -132,7 +123,7 @@ export function BgmSettings({
         return next;
       });
 
-      onBgmUrlChange(data.url);
+      onBgmUrlChange(url);
       onEnabledChange(true);
       setPreviewBgmId(newTrack.id);
     } catch (error: unknown) {

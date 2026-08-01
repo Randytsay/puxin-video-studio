@@ -14,7 +14,6 @@ const NOOP_PROPS = {
   bgmVolume: 0.3,
   bgmStartTime: 0,
   bgmEndTime: null,
-  bgmEnabled: false,
   subtitleAudioEnabled: false,
   subtitleAudioVolume: 0.8,
   onBgmUrlChange: vi.fn(),
@@ -50,7 +49,7 @@ describe('<BgmSettings />', () => {
   });
 
   it('with a track loaded it shows the audio element + delete button', () => {
-    render(<BgmSettings {...NOOP_PROPS} bgmUrl="/uploads/audio/test.mp3" bgmEnabled />);
+    render(<BgmSettings {...NOOP_PROPS} bgmUrl="/uploads/audio/test.mp3" />);
 
     // <audio controls> is rendered when bgmUrl is set.
     expect(document.querySelector('audio[src="/uploads/audio/test.mp3"]')).not.toBeNull();
@@ -66,7 +65,6 @@ describe('<BgmSettings />', () => {
       <BgmSettings
         {...NOOP_PROPS}
         bgmUrl="/uploads/audio/test.mp3"
-        bgmEnabled
         onBgmUrlChange={onBgmUrlChange}
         onEnabledChange={onEnabledChange}
       />,

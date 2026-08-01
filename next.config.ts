@@ -5,6 +5,14 @@ import createNextIntlPlugin from 'next-intl/plugin';
 const withNextIntl = createNextIntlPlugin('./i18n/request.ts');
 
 const nextConfig: NextConfig = {
+  experimental: {
+    // Because proxy.ts matches /api/upload, Next clones the request body
+    // through a size-capped stream. The default cap is 10MB and overflow is
+    // *truncated*, not rejected — so without this the route's own 100MB limit
+    // was unreachable and large uploads arrived as an unparseable multipart
+    // body. Keep in sync with MAX_FILE_SIZE in app/api/upload/route.ts.
+    proxyClientMaxBodySize: 100 * 1024 * 1024,
+  },
   serverExternalPackages: [
     '@remotion/bundler',
     '@remotion/renderer',

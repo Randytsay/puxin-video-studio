@@ -9,7 +9,7 @@ import {
   staticFile,
 } from 'remotion';
 import { ProductVideoProps, TransitionType } from './types';
-import { computeClipFrameSpans, computeTotalFrames } from './timeline';
+import { computeClipFrameSpans, computeTotalFrames, NARRATION_PLAYBACK_RATE } from './timeline';
 import { Subtitle } from './Subtitle';
 import { TimeBasedSubtitle } from './TimeBasedSubtitle';
 import { ClipTransition } from './Transitions';
@@ -51,10 +51,8 @@ export const ProductVideo: React.FC<ProductVideoProps> = ({ clips, productName, 
   // 控えめなレイアウト（classic、modern、minimalをローテーション）
   const layoutTemplates: LayoutTemplateType[] = ['classic', 'modern', 'minimal', 'classic', 'modern'];
   
-  // 最初から開始（オープニングなし）
-  let currentTime = 0;
   // 音声の1.2倍速再生（音声の再生速度のみを上げる、シーンの表示時間はclip.durationに基づく）
-  const audioPlaybackRate = 1.2;
+  const audioPlaybackRate = NARRATION_PLAYBACK_RATE;
   
   // フレーム割り当ては src/timeline.ts に集約（累積境界を丸めるため、
   // クリップ同士が1フレーム重なることがない）。Root.tsx / VideoEditor.tsx も
@@ -63,10 +61,7 @@ export const ProductVideo: React.FC<ProductVideoProps> = ({ clips, productName, 
 
   const sequences = clips.map((clip, index) => {
     // クリップの実際のdurationを使用（デフォルトは3秒）
-    const clipDuration = clip.duration || 3.0;
     const { startFrame, durationInFrames } = frameSpans[index];
-    // 次のクリップの開始時間を正確に計算（clip.durationに基づいて加算）
-    currentTime += clipDuration;
 
     // トランジションタイプを選択
     // clip.transitionTypeが明示的に設定されている場合はそれを使用

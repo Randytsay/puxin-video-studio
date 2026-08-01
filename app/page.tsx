@@ -6,6 +6,7 @@ import { useTranslations } from 'next-intl';
 import { useAppStore } from '@/lib/store';
 import { LanguageSwitcher } from '@/components/LanguageSwitcher';
 import type { VideoClip } from '@/src/types';
+import { uploadFile as uploadFileRequest } from '@/lib/utils/uploadFile';
 
 const DEFAULT_CLIP_DURATION = 3;
 // Repository URL for GitHub CTAs. Set NEXT_PUBLIC_GITHUB_URL in .env.local.
@@ -15,15 +16,8 @@ const GITHUB_URL = process.env.NEXT_PUBLIC_GITHUB_URL?.trim() || '';
 const HAS_GITHUB_URL = GITHUB_URL.length > 0;
 
 async function uploadFile(file: File): Promise<string> {
-  const fd = new FormData();
-  fd.append('file', file);
-  const res = await fetch('/api/upload', { method: 'POST', body: fd });
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({ error: 'Upload failed' }));
-    throw new Error(body.error || `Upload failed: ${res.status}`);
-  }
-  const data: { url: string } = await res.json();
-  return data.url;
+  const { url } = await uploadFileRequest(file);
+  return url;
 }
 
 // --- Icons -----------------------------------------------------------------

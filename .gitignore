@@ -25,8 +25,11 @@ yarn-debug.log*
 yarn-error.log*
 
 # local env files
-.env*.local
-.env
+# Ignore every .env variant and allow only the checked-in template. The
+# previous pair missed .env.production and .env.development, both of which
+# Next.js loads and both of which would have been committed.
+.env*
+!.env.example
 
 # vercel
 .vercel

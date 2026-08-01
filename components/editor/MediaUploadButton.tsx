@@ -7,6 +7,7 @@
 import { useRef } from 'react';
 import { useTranslations } from 'next-intl';
 import { logError } from '@/lib/utils/logger.client';
+import { uploadFile } from '@/lib/utils/uploadFile';
 
 export interface MediaUploadButtonProps {
   onUpload: (url: string) => void;
@@ -17,23 +18,9 @@ export function MediaUploadButton({ onUpload }: MediaUploadButtonProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleUpload = async (file: File) => {
-    const formData = new FormData();
-    formData.append('file', file);
-
     try {
-      const response = await fetch('/api/upload', {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ error: 'Upload failed' }));
-        throw new Error(errorData.error || t('error.mediaUploadFailed'));
-      }
-
-      const data = await response.json();
-      if (!data.url) throw new Error(t('error.noUrlReturned'));
-      onUpload(data.url);
+      const { url } = await uploadFile(file, t('error.mediaUploadFailed'));
+      onUpload(url);
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
       logError('メディアのアップロードに失敗しました:', error);

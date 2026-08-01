@@ -166,9 +166,6 @@ function BgmPanel({
   const t = useTranslations('editor');
   const setActivePanel = useEditorStore((s) => s.setActivePanel);
 
-  // BgmSettings still takes a `bgmEnabled` prop for legacy reasons but
-  // ignores it internally. While the panel is rendered it is by definition
-  // the active panel, so pass `true`.
   return (
     <PanelShell title={t('panels.bgmSettingsTitle')} onClose={() => setActivePanel('none')}>
       <BgmSettings
@@ -176,7 +173,6 @@ function BgmPanel({
         bgmVolume={bgmVolume}
         bgmStartTime={bgmStartTime}
         bgmEndTime={bgmEndTime}
-        bgmEnabled
         subtitleAudioEnabled={subtitleAudioEnabled}
         subtitleAudioVolume={subtitleAudioVolume}
         onBgmUrlChange={onBgmUrlChange}

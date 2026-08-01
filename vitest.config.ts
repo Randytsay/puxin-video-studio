@@ -18,15 +18,24 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html'],
+      // The coverage denominator has to match what we actually ship, or the
+      // headline number is meaningless. Previously `src/**` was omitted
+      // entirely (hiding ~1.7k lines of Remotion composition code, and also
+      // denying credit for src/timeline.ts which *is* tested), while the
+      // `components/editor/**/*.tsx` glob silently dropped every
+      // `components/editor/hooks/*.ts` file because of the extension.
       include: [
         'app/api/**/*.ts',
         'lib/**/*.ts',
         'scripts/**/*.mjs',
-        'components/editor/**/*.tsx',
+        'src/**/*.{ts,tsx}',
+        'components/**/*.{ts,tsx}',
       ],
       exclude: [
         '**/*.d.ts',
         'lib/utils/logger*.ts',
+        // Registers the Remotion root as a side effect; nothing to unit test.
+        'src/Root.tsx',
       ],
     },
   },

@@ -1,24 +1,21 @@
 'use client';
 
-import { debug, info, warn, logError } from '@/lib/utils/logger.client';
+import { debug, warn, logError } from '@/lib/utils/logger.client';
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useTranslations } from 'next-intl';
 import { Player, PlayerRef } from '@remotion/player';
-import { VideoClip, Subtitle, TransitionType } from '@/src/types';
+import { VideoClip, Subtitle } from '@/src/types';
 import { ProductVideo } from '@/src/ProductVideo';
 import { RESOLUTIONS, VideoResolution, VideoAspectRatio } from '@/src/types';
-import { useAppStore } from '@/lib/store';
 import { useEditorStore } from '@/lib/editorStore';
-import { SUBTITLE_PRESETS, AVAILABLE_FONTS, applyPresetToSubtitle } from '@/lib/subtitlePresets';
-import { BGM_LIBRARY, getBgmByGenre, getGenres, BgmTrack } from '@/lib/bgmLibrary';
 import { useUrlConverter } from '@/lib/hooks/useUrlConverter';
 import { reindexClips } from '@/lib/utils/clips';
-import { computeTotalFrames, VIDEO_FPS } from '@/src/timeline';
+import { computeTotalFrames, VIDEO_FPS, timelineToAudioOffset } from '@/src/timeline';
+import { bgmTimeForPlayhead } from '@/lib/utils/bgm';
 import { TOUR_TARGETS } from '@/lib/onboardingTargets';
 import { Onboarding } from './Onboarding';
 import { ToolButton } from './editor/ToolButton';
-import { MediaUploadButton } from './editor/MediaUploadButton';
 import { ModernTimeline } from './editor/ModernTimeline';
 import { SidePanelsContainer } from './editor/SidePanelsContainer';
 import { SubtitlePreviewOverlay } from './editor/SubtitlePreviewOverlay';
@@ -30,6 +27,18 @@ import { ShortcutsOverlay } from './editor/dialogs/ShortcutsOverlay';
 import { ExportDialog } from './editor/dialogs/ExportDialog';
 import { ExitConfirmDialog } from './editor/dialogs/ExitConfirmDialog';
 
+/**
+ * Everything the export needs that lives inside the editor rather than in the
+ * page. Passing it with the export call — instead of relying on the parent
+ * having mirrored it earlier — is what stops "the user never pressed Save" from
+ * silently producing a video with no subtitles and untrimmed BGM.
+ */
+export interface ExportPayload {
+  subtitles: Subtitle[];
+  bgmStartTime: number;
+  bgmEndTime: number | null;
+}
+
 interface VideoEditorProps {
   clips: VideoClip[];
   productName?: string;
@@ -38,7 +47,7 @@ interface VideoEditorProps {
   videoTempo: number;
   audioEnabled: boolean;
   onClipsChange: (clips: VideoClip[] | ((prevClips: VideoClip[]) => VideoClip[])) => void;
-  onExport: (exportResolution: VideoResolution) => void;
+  onExport: (exportResolution: VideoResolution, payload: ExportPayload) => void;
   onSaveDraft?: (subtitles: Subtitle[]) => Promise<void>; // 字幕データを渡すように変更
   isSavingDraft?: boolean;
   videoUrl?: string | null; // 完成した動画のURL（オプション）
@@ -496,7 +505,9 @@ export function VideoEditor({
   }, [windowSize, previewHeight]);
 
   // Undo/Redo履歴管理 (lifted to useEditorStore)
-  const history = useEditorStore((s) => s.history);
+  // 履歴の配列そのものは購読しないこと。VideoClip[][] の全スナップショットを
+  // 購読すると、pushHistory のたびにこの巨大コンポーネントが再レンダーされる。
+  // 実際に必要なのは historyIndex（ボタンの活性判定）だけ。
   const historyIndex = useEditorStore((s) => s.historyIndex);
   const initHistoryStore = useEditorStore((s) => s.initHistory);
   const pushHistoryStore = useEditorStore((s) => s.pushHistory);
@@ -621,9 +632,9 @@ export function VideoEditor({
       // これにより、プレビューが空になることを防ぐ
     }
 
+    // _timestamp / _random は入れないこと。毎回異なる値を inputProps に混ぜると
+    // Player 内部のあらゆるメモ化が無効化され、useMemo の意味もなくなる。
     const result = {
-      _timestamp: Date.now(),
-      _random: Math.random(),
       clips: clips.map((c, index) => {
         // 変換後のURLを使用（変換に失敗した場合、または変換中は元のURLを使用）
         // convertedImageUrlsが空の場合は、元のimageUrlを使用
@@ -729,7 +740,11 @@ export function VideoEditor({
       .map((s) => `${s.id}-${s.text}-${s.startTime}-${s.endTime}`)
       .join('|');
     
-    const key = `player-${Date.now()}-${clips.length}-${subtitles.length}-${Math.abs(
+    // 内容ハッシュのみで構成すること。以前は先頭に Date.now() が入っていたため
+    // 再計算のたびに必ず新しい key になり、編集のたびに Player が
+    // アンマウント→再マウントされていた（その後始末として「100ms 隠して
+    // 再シークし、200ms フラグを立てる」処理が必要になっていた）。
+    const key = `player-${clips.length}-${subtitles.length}-${Math.abs(
       (clipsHash + subtitlesHash).split('').reduce((acc, ch) => {
         const code = ch.charCodeAt(0);
         acc = (acc << 5) - acc + code;
@@ -1126,20 +1141,16 @@ export function VideoEditor({
         // おり、トリム開始を10秒にすると冒頭10秒が無音になったうえ、その後
         // ファイルを0秒（＝カットしたはずのイントロ）から再生していた。
         // 書き出し結果と正反対の挙動になっていたので、レンダラ側に合わせる。
-        const trimStart = Math.max(0, bgmStartTime);
         // 終了位置未指定なら「ファイル末尾まで」。レンダラ側も loop 付きなので、
-        // 区間が動画より短ければどちらも繰り返す。
+        // 区間が動画より短ければどちらも繰り返す。計算は lib/utils/bgm.ts に
+        // 集約し、シーク時の同期処理と必ず同じ式を使う。
         const fileDuration = Number.isFinite(bgmAudio.duration) ? bgmAudio.duration : null;
-        const rawEnd = bgmEndTime !== null ? bgmEndTime : fileDuration;
-        const trimEnd = rawEnd !== null && rawEnd > trimStart ? rawEnd : null;
-        const trimLength = trimEnd !== null ? trimEnd - trimStart : null;
-
-        // トリム区間内での再生位置。区間長を超えたぶんは剰余でループさせる。
-        const offsetInTrim =
-          trimLength !== null && trimLength > 0
-            ? playerTime % trimLength
-            : playerTime;
-        const targetTime = trimStart + offsetInTrim;
+        const targetTime = bgmTimeForPlayhead(
+          playerTime,
+          bgmStartTime,
+          bgmEndTime,
+          fileDuration,
+        );
 
         // 動画の再生位置に合わせてBGMを同期
         if (isPlaying) {
@@ -1230,28 +1241,20 @@ export function VideoEditor({
     const bgmAudio = bgmAudioRef.current;
     try {
       const currentFrame = playerRef.current.getCurrentFrame();
-      const playerTime = currentFrame / 30;
+      const playerTime = currentFrame / VIDEO_FPS;
 
-      // BGMの開始位置に達していない場合は停止
-      if (playerTime < bgmStartTime) {
-        bgmAudio.pause();
-        bgmAudio.currentTime = 0;
-        return;
-      }
-
-      // BGMの終了位置をチェック
-      if (bgmEndTime !== null && playerTime >= bgmEndTime) {
-        bgmAudio.pause();
-        const bgmFileEndTime = bgmEndTime - bgmStartTime;
-        bgmAudio.currentTime = bgmFileEndTime;
-        return;
-      }
-
-      // BGMファイル内の再生位置を計算
-      const bgmFileTime = playerTime - bgmStartTime;
-      const targetTime = Math.max(0, bgmFileTime);
-      bgmAudio.currentTime = targetTime;
-    } catch (error) {
+      // bgmStartTime / bgmEndTime は「BGMファイル内」のトリム区間。
+      // ここだけ旧解釈（タイムライン上の開始位置）が残っており、トリム開始を
+      // 10秒にすると冒頭10秒のシークのたびに BGM が一時停止＆巻き戻しされ、
+      // 100ms 間隔の同期処理と矛盾して音が途切れていた。
+      const fileDuration = Number.isFinite(bgmAudio.duration) ? bgmAudio.duration : null;
+      bgmAudio.currentTime = bgmTimeForPlayhead(
+        playerTime,
+        bgmStartTime,
+        bgmEndTime,
+        fileDuration,
+      );
+    } catch {
       // エラーは無視
     }
   }, [currentTime, videoUrl, bgmUrl, bgmStartTime, bgmEndTime]);
@@ -1297,9 +1300,12 @@ export function VideoEditor({
     // Playerの再レンダリングを促すために、現在のフレームを再設定
     try {
       const currentFrame = playerRef.current.getCurrentFrame();
-      const maxFrame = Math.ceil(totalDuration * 30);
+      // コンポジションの長さは computeTotalFrames が唯一の実装。
+      // ここだけ Math.ceil(totalDuration * 30) で別計算していたため、
+      // 端数によっては1フレーム長く見積もられていた。
+      const maxFrame = Math.max(1, computeTotalFrames(clips, VIDEO_FPS));
       if (currentFrame >= maxFrame && maxFrame > 0) {
-        const newTime = Math.max(0, (maxFrame - 1) / 30);
+        const newTime = Math.max(0, (maxFrame - 1) / VIDEO_FPS);
         updateCurrentTime(newTime, true);
       }
     } catch {
@@ -1383,6 +1389,13 @@ export function VideoEditor({
     }
   }, [videoUrl, disableEmbeddedSubtitles]);
 
+  // 直近コミット済みのクリップ配列。ドラッグ中の mousemove クロージャからでも
+  // 「1つ前の値」を正しく読むために使う。
+  const clipsRef = useRef(clips);
+  useEffect(() => {
+    clipsRef.current = clips;
+  }, [clips]);
+
   // 履歴に追加するヘルパー関数
   // レンダリング中の状態更新を防ぐため、queueMicrotaskで遅延実行
   const addToHistory = useCallback((newClips: VideoClip[]) => {
@@ -1390,6 +1403,15 @@ export function VideoEditor({
       pushHistoryStore(newClips);
     });
   }, [pushHistoryStore]);
+
+  /**
+   * ドラッグ操作の確定時に一度だけ履歴を積む。リサイズ中は mousemove ごとに
+   * handleClipEdit が走るため、そこで履歴を積むと1回のドラッグで数十件の
+   * エントリが生まれ、Ctrl+Z がマウスサンプル1個分しか戻らなくなっていた。
+   */
+  const handleClipEditCommit = useCallback(() => {
+    addToHistory(clipsRef.current);
+  }, [addToHistory]);
 
   // Phase 3.5: clip CRUD handlers (delete / reorder / extend / copy / paste)
   // extracted to useClipHandlers. Cut/Edit/Add/Select stay in this file
@@ -1449,72 +1471,67 @@ export function VideoEditor({
     debug('[VideoEditor] ==================================================');
   }, [clips]);
 
-  // クリップの編集（コールバック形式で最新のstateを確実に参照）
-  const handleClipEdit = useCallback((index: number, updates: Partial<VideoClip>) => {
-    debug('[VideoEditor/handleClipEdit] ========== 開始 ==========');
-    debug('[VideoEditor/handleClipEdit] Editing clip index:', index);
-    debug('[VideoEditor/handleClipEdit] Updates:', updates);
-    debug('[VideoEditor/handleClipEdit] Current clips count:', clips.length);
-    
-    // setStateのコールバック形式を使用して、最新のstateを取得
+  /**
+   * クリップの編集。
+   *
+   * `transient: true` はドラッグ中の中間状態（リサイズの mousemove ごと）を意味し、
+   * 履歴を積まない。確定時に handleClipEditCommit が一度だけ履歴を積む。
+   *
+   * 状態更新関数は純粋に保つこと。以前はこの中で addToHistory と setSubtitles を
+   * 呼んでおり、StrictMode の二重実行で履歴が重複していた。さらに字幕側だけ
+   * クロージャの `subtitles` を直接参照していたため、ドラッグ中はドラッグ開始時点の
+   * 配列に対して毎回「最後の1回分の差分」だけを適用しており、
+   * クリップと字幕のタイミングがずれていた。関数型更新なら常に最新を読む。
+   */
+  const handleClipEdit = useCallback((
+    index: number,
+    updates: Partial<VideoClip>,
+    options?: { transient?: boolean },
+  ) => {
     onClipsChange((prevClips) => {
-      debug('[VideoEditor/handleClipEdit] Previous clips count:', prevClips.length);
       const updatedClips = [...prevClips];
-      
-      // 変更前の値をログ
-      debug('[VideoEditor/handleClipEdit] Before update:', {
-        plotName: updatedClips[index]?.plotName,
-        text: updatedClips[index]?.text?.substring(0, 30) || '(no text)',
-        duration: updatedClips[index]?.duration,
-        imageEffect: updatedClips[index]?.imageEffect || 'none',
-        transitionType: updatedClips[index]?.transitionType || 'none',
-        scale: updatedClips[index]?.scale || 1.0,
-        position: updatedClips[index]?.position || { x: 0, y: 0 },
-      });
-      
-    updatedClips[index] = { ...updatedClips[index], ...updates };
-      
-      // 変更後の値をログ
-      debug('[VideoEditor/handleClipEdit] After update:', {
-        plotName: updatedClips[index]?.plotName,
-        text: updatedClips[index]?.text?.substring(0, 30) || '(no text)',
-        duration: updatedClips[index]?.duration,
-        imageEffect: updatedClips[index]?.imageEffect || 'none',
-        transitionType: updatedClips[index]?.transitionType || 'none',
-        scale: updatedClips[index]?.scale || 1.0,
-        position: updatedClips[index]?.position || { x: 0, y: 0 },
-      });
-      
-      // 履歴への追加（addToHistory内でqueueMicrotaskを使用しているため、ここでは直接呼び出し）
+      updatedClips[index] = { ...updatedClips[index], ...updates };
+      return updatedClips;
+    });
+
+    const prevClips = clipsRef.current;
+    const clipStartTime = prevClips
+      .slice(0, index)
+      .reduce((sum: number, c: VideoClip) => sum + (c.duration || 3), 0);
+
+    if (!options?.transient) {
+      const updatedClips = [...prevClips];
+      updatedClips[index] = { ...updatedClips[index], ...updates };
       addToHistory(updatedClips);
-    
+    }
+
     // clip.textが更新された場合、対応するsubtitlesエントリも更新
     if (updates.text !== undefined) {
-      const clip = updatedClips[index];
-      // updatedClipsに基づいてclipStartTimeを計算
-        const clipStartTime = updatedClips.slice(0, index).reduce((sum: number, c: VideoClip) => sum + (c.duration || 3), 0);
-      const clipDuration = clip.duration || 3;
+      const clipDuration = updates.duration ?? prevClips[index]?.duration ?? 3;
       const clipEndTime = clipStartTime + clipDuration;
-      
-      // 対応する字幕を検索（開始時間が一致する字幕）
-      const subtitleIndex = subtitles.findIndex(
-        (sub) => Math.abs(sub.startTime - clipStartTime) < 0.01
-      );
-      
-      if (subtitleIndex !== -1) {
-        // 既存の字幕を更新
-        const updatedSubtitles = [...subtitles];
-        updatedSubtitles[subtitleIndex] = {
-          ...updatedSubtitles[subtitleIndex],
-          text: updates.text || '',
-          endTime: clipEndTime,
-        };
-        setSubtitles(updatedSubtitles);
-      } else if (updates.text && updates.text.trim()) {
-        // 字幕が存在しない場合は新規作成
+      const text = updates.text ?? '';
+
+      setSubtitles((prevSubtitles) => {
+        const subtitleIndex = prevSubtitles.findIndex(
+          (sub) => Math.abs(sub.startTime - clipStartTime) < 0.01,
+        );
+
+        if (subtitleIndex !== -1) {
+          // テキストが空になった場合は字幕を削除。
+          // 以前はこの分岐が先行条件に吸収されて到達不能だった。
+          if (!text.trim()) {
+            return prevSubtitles.filter((_, i) => i !== subtitleIndex);
+          }
+          const next = [...prevSubtitles];
+          next[subtitleIndex] = { ...next[subtitleIndex], text, endTime: clipEndTime };
+          return next;
+        }
+
+        if (!text.trim()) return prevSubtitles;
+
         const newSubtitle: Subtitle = {
           id: `subtitle-${index}-${Date.now()}`,
-          text: updates.text,
+          text,
           startTime: clipStartTime,
           endTime: clipEndTime,
           position: 'bottom',
@@ -1526,44 +1543,36 @@ export function VideoEditor({
           align: 'center',
           positionXPercent: 50, // 中央
         };
-        setSubtitles([...subtitles, newSubtitle]);
-      } else if (subtitleIndex !== -1 && (!updates.text || !updates.text.trim())) {
-        // テキストが空になった場合は字幕を削除
-        const updatedSubtitles = subtitles.filter((_, i) => i !== subtitleIndex);
-        setSubtitles(updatedSubtitles);
-      }
+        return [...prevSubtitles, newSubtitle];
+      });
     }
-      
-      // durationの変更時の字幕調整
-      if (updates.duration !== undefined) {
-        const clip = updatedClips[index];
-        const oldDuration = prevClips[index]?.duration || 3;
-        const newDuration = updates.duration || 3;
-        const durationDiff = newDuration - oldDuration;
-        
-        if (durationDiff !== 0) {
-          const clipStartTime = updatedClips.slice(0, index).reduce((sum: number, c: VideoClip) => sum + (c.duration || 3), 0);
-          const clipEndTime = clipStartTime + oldDuration;
-          
-          const updatedSubtitles = subtitles.map(sub => {
+
+    // durationの変更時の字幕調整
+    if (updates.duration !== undefined) {
+      const oldDuration = prevClips[index]?.duration || 3;
+      const newDuration = updates.duration || 3;
+      const durationDiff = newDuration - oldDuration;
+
+      if (durationDiff !== 0) {
+        const clipEndTime = clipStartTime + oldDuration;
+        setSubtitles((prevSubtitles) =>
+          prevSubtitles.map((sub) => {
             if (sub.startTime >= clipEndTime) {
-              return { ...sub, startTime: sub.startTime + durationDiff, endTime: sub.endTime + durationDiff };
-            } else if (sub.startTime >= clipStartTime && sub.startTime < clipEndTime) {
-              if (sub.endTime > clipEndTime) {
-                return { ...sub, endTime: sub.endTime + durationDiff };
-              }
+              return {
+                ...sub,
+                startTime: sub.startTime + durationDiff,
+                endTime: sub.endTime + durationDiff,
+              };
+            }
+            if (sub.startTime >= clipStartTime && sub.startTime < clipEndTime && sub.endTime > clipEndTime) {
+              return { ...sub, endTime: sub.endTime + durationDiff };
             }
             return sub;
-          });
-          
-          setSubtitles(updatedSubtitles);
-        }
+          }),
+        );
       }
-      
-      debug('[VideoEditor/handleClipEdit] ========== 完了 ==========');
-      return updatedClips;
-    });
-  }, [clips, onClipsChange, addToHistory, subtitles]);
+    }
+  }, [onClipsChange, addToHistory]);
 
   // (handleClipDelete moved to useClipHandlers — see hook invocation below)
 
@@ -1882,7 +1891,10 @@ export function VideoEditor({
       duration: clipDuration - cutPosition,
       index: selectedClipIndex + 1,
       totalClips: clips.length + 1,
-      audioStartTime: originalAudioStartTime + cutPosition, // 2つ目の部分はカット位置から開始
+      // audioStartTime は「音声ファイル内の秒数」。タイムライン上の cutPosition 秒は
+      // 1.2倍速再生のぶんだけ多くファイルを消費するため、そのまま足すと
+      // 2つ目の冒頭でナレーションが約20%巻き戻って重複していた。
+      audioStartTime: originalAudioStartTime + timelineToAudioOffset(cutPosition),
     };
     
     let updatedClips = [...clips];
@@ -1939,7 +1951,8 @@ export function VideoEditor({
       updatedClips[targetClipIndex] = {
         ...targetClip,
         duration: newDuration,
-        audioStartTime: originalAudioStartTime + cutPosition, // カット位置分、音声の開始位置を進める
+        // タイムライン秒 → 音声ファイル秒への換算が必要（1.2倍速再生のため）。
+        audioStartTime: originalAudioStartTime + timelineToAudioOffset(cutPosition),
       };
       
       // インデックスを更新
@@ -1977,7 +1990,8 @@ export function VideoEditor({
           updatedClips[targetClipIndex] = {
             ...targetClip,
             duration: remainingDuration,
-            audioStartTime: originalTargetAudioStartTime + gapDuration, // ギャップ分、音声の開始位置を進める
+            // タイムライン秒 → 音声ファイル秒への換算が必要（1.2倍速再生のため）。
+            audioStartTime: originalTargetAudioStartTime + timelineToAudioOffset(gapDuration),
           };
         } else {
           // 現在のクリップを削除
@@ -2076,7 +2090,8 @@ export function VideoEditor({
           updatedClips[nextClipIndex - (newDuration > 0 ? 0 : 1)] = {
             ...nextClip,
             duration: remainingDuration,
-            audioStartTime: originalNextAudioStartTime + gapDuration, // ギャップ分、音声の開始位置を進める
+            // タイムライン秒 → 音声ファイル秒への換算が必要（1.2倍速再生のため）。
+            audioStartTime: originalNextAudioStartTime + timelineToAudioOffset(gapDuration),
           };
         } else {
           // 次のクリップを削除
@@ -2262,8 +2277,8 @@ export function VideoEditor({
   // エクスポートを実行
   const handleConfirmExport = useCallback(() => {
     setShowExportDialog(false);
-    onExport(exportResolution);
-  }, [exportResolution, onExport, setShowExportDialog]);
+    onExport(exportResolution, { subtitles, bgmStartTime, bgmEndTime });
+  }, [exportResolution, onExport, setShowExportDialog, subtitles, bgmStartTime, bgmEndTime]);
 
   // Phase 3.5: keyboard shortcut bindings extracted to a hook.
   useKeyboardShortcuts(
@@ -2688,7 +2703,8 @@ export function VideoEditor({
               // クリップの開始位置に移動
               updateCurrentTime(clipStartTimes[index], true);
             }}
-            onClipEdit={(index, updates) => handleClipEdit(index, updates)}
+            onClipEdit={handleClipEdit}
+            onClipEditCommit={handleClipEditCommit}
             onClipDelete={handleClipDelete}
             onClipAdd={handleClipAdd}
             isAddingScene={isAddingScene}

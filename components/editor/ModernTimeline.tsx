@@ -6,7 +6,7 @@
 // sub-component of the editor (~1.5k lines) — extracted from VideoEditor.tsx
 // in Phase 1 of the refactor; not yet split further by track.
 
-import { useState, useRef, useEffect, useMemo } from 'react';
+import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { useDragSession } from './hooks/useDragSession';
 import { useTranslations } from 'next-intl';
 import { debug } from '@/lib/utils/logger.client';
@@ -22,7 +22,12 @@ export interface ModernTimelineProps {
   onTimeClick: (time: number, isDragging?: boolean) => void;
   onClipSelect: (index: number, modifiers?: { shift?: boolean; ctrl?: boolean; meta?: boolean }) => void;
   onClipDoubleClick?: (index: number, modifiers?: { shift?: boolean; ctrl?: boolean; meta?: boolean }) => void;
-  onClipEdit: (index: number, updates: Partial<VideoClip>) => void;
+  /**
+   * `transient: true` はドラッグ中の中間状態。呼び出し側は履歴を積まない。
+   * ドラッグ確定時に onClipEditCommit が一度だけ呼ばれる。
+   */
+  onClipEdit: (index: number, updates: Partial<VideoClip>, options?: { transient?: boolean }) => void;
+  onClipEditCommit?: () => void;
   onClipDelete: (index: number) => void;
   onClipAdd: () => void;
   isAddingScene?: boolean;
@@ -41,6 +46,15 @@ export interface ModernTimelineProps {
   onBgmTrackClick?: () => void;
 }
 
+/**
+ * Empty tail rendered past the last clip so the "add scene" affordance has
+ * somewhere to live. Every layout percentage and every pointer→time inversion
+ * must use `totalDuration + TIMELINE_TAIL_SECONDS` as its denominator; mixing
+ * the two made the playhead land short of the cursor, with the error growing
+ * toward the end of the timeline.
+ */
+const TIMELINE_TAIL_SECONDS = 3;
+
 export function ModernTimeline({
   clips,
   clipStartTimes,
@@ -51,6 +65,7 @@ export function ModernTimeline({
   onClipSelect,
   onClipDoubleClick,
   onClipEdit,
+  onClipEditCommit,
   onClipDelete,
   onClipAdd,
   isAddingScene,
@@ -73,15 +88,10 @@ export function ModernTimeline({
   const timelineContainerRef = useRef<HTMLDivElement>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isDraggingPin, setIsDraggingPin] = useState(false); // ピンのドラッグ中かどうか
-  const [isBoxSelecting, setIsBoxSelecting] = useState(false); // ドラッグボックス選択中かどうか
-  const [boxSelectStart, setBoxSelectStart] = useState<{ x: number; y: number } | null>(null);
-  const [boxSelectEnd, setBoxSelectEnd] = useState<{ x: number; y: number } | null>(null);
   const [draggedClipIndex, setDraggedClipIndex] = useState<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
-  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
   const dragStartPos = useRef<{ x: number; y: number } | null>(null);
   const [resizingClipIndex, setResizingClipIndex] = useState<number | null>(null);
-  const [resizeHandle, setResizeHandle] = useState<'left' | 'right' | null>(null);
   const resizeStartTime = useRef<number>(0);
   const resizeStartDuration = useRef<number>(0);
   const shouldAutoScroll = useRef<boolean>(true);
@@ -102,7 +112,6 @@ export function ModernTimeline({
   
   // 字幕リサイズ・ドラッグ用の状態
   const [resizingSubtitleId, setResizingSubtitleId] = useState<string | null>(null);
-  const [subtitleResizeHandle, setSubtitleResizeHandle] = useState<'left' | 'right' | null>(null);
   const [draggingSubtitleId, setDraggingSubtitleId] = useState<string | null>(null);
   const subtitleResizeStartTime = useRef<number>(0);
   const subtitleResizeStartEndTime = useRef<number>(0);
@@ -131,30 +140,84 @@ export function ModernTimeline({
 
   // タイムラインの幅を計算（ズームレベルに応じて）
   // 実際の秒数よりも3秒分多く将来方向にタイムラインを表示（「＋シーン追加」ボタン用）
+  const extendedDuration = totalDuration + TIMELINE_TAIL_SECONDS;
+
   const timelineWidth = useMemo(() => {
     // 基本幅: 1秒あたり100px、ズームで調整
     // totalDurationに3秒を追加して、将来方向に3秒分のスペースを確保
-    const extendedDuration = totalDuration + 3;
-    const baseWidth = extendedDuration * 100 * zoom;
+    const baseWidth = (totalDuration + TIMELINE_TAIL_SECONDS) * 100 * zoom;
     // 最小幅はコンテナ幅、最大幅は制限なし
     return Math.max(800, baseWidth);
   }, [totalDuration, zoom]);
 
-  const handleTimelineClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!timelineRef.current || !timelineContainerRef.current) return;
-    
-    const containerRect = timelineContainerRef.current.getBoundingClientRect();
-    const timelineRect = timelineRef.current.getBoundingClientRect();
-    // スクロール位置を考慮した相対位置
-    const x = e.clientX - containerRect.left + timelineContainerRef.current.scrollLeft;
-    const percentage = x / timelineRect.width;
-    // タイムラインの表示範囲を3秒延長しているため、totalDuration + 3を基準に計算
-    const extendedDuration = totalDuration + 3;
-    const time = percentage * extendedDuration;
-    
-    // クリックできる範囲は実際のtotalDurationまでに制限
-    onTimeClick(Math.max(0, Math.min(time, totalDuration)));
+  // ポインタ変換用の最新値。ドラッグ用の mousemove クロージャは mousedown 時に
+  // 一度だけ生成されるため、レンダースコープの totalDuration をそのまま掴むと
+  // ドラッグ開始時点の値に固定される。一方で幅は DOM から都度読むので、
+  // 「分子は最新・分母は過去」という不整合が生じ、ハンドルがカーソルに
+  // 追従せず発散していた。ref 経由なら常に最新を読む。
+  const totalDurationRef = useRef(totalDuration);
+  useEffect(() => {
+    totalDurationRef.current = totalDuration;
+  }, [totalDuration]);
+
+  /**
+   * ポインタの clientX をタイムライン上の時刻（秒）へ変換する唯一の関数。
+   * 以前は同じ計算が8箇所にコピーされており、分母の修正が一部にしか
+   * 適用されずズーム系だけ古いままになっていた。
+   * 識別子は安定（deps は空）なのでドラッグクロージャから安全に呼べる。
+   */
+  const timeFromClientX = useCallback((clientX: number): number => {
+    const container = timelineContainerRef.current;
+    const timeline = timelineRef.current;
+    if (!container || !timeline) return 0;
+    const width = timeline.getBoundingClientRect().width;
+    if (width <= 0) return 0;
+    const x = clientX - container.getBoundingClientRect().left + container.scrollLeft;
+    return (x / width) * (totalDurationRef.current + TIMELINE_TAIL_SECONDS);
+  }, []);
+
+  /** 上と同じだが、再生可能な範囲 [0, totalDuration] にクランプする。 */
+  const seekTimeFromClientX = useCallback(
+    (clientX: number): number =>
+      Math.max(0, Math.min(totalDurationRef.current, timeFromClientX(clientX))),
+    [timeFromClientX],
+  );
+
+  const handleTimelineClick = (e: React.MouseEvent<HTMLDivElement>, isDraggingSeek = false) => {
+    onTimeClick(seekTimeFromClientX(e.clientX), isDraggingSeek);
   };
+
+  // 「押してから離すまでに実際にスクラブしたか」を追跡する。単発クリックと
+  // ドラッグを mouseup 時点で区別するために使う。
+  const didScrubRef = useRef(false);
+  const lastSeekTimeRef = useRef(0);
+  const enteredZoomModeRef = useRef(false);
+
+  /**
+   * タイムライン上のドラッグ操作を終了する。長押しズーム用タイマーの後始末を
+   * 含むため、ポインタがタイムラインの外で離された場合も必ずここを通す。
+   * 以前はグローバル mouseup が isDragging を落とすだけでタイマーを残しており、
+   * ボタンを離した後にホバーしただけでズームが動き続けることがあった。
+   */
+  const endTimelineDrag = useCallback(() => {
+    if (horizontalZoomTimerRef.current) {
+      clearTimeout(horizontalZoomTimerRef.current);
+      horizontalZoomTimerRef.current = null;
+    }
+    setIsHorizontalZoomDragging(false);
+    horizontalZoomMouseDownPositionRef.current = null;
+    setIsDragging(false);
+
+    // 動かさずに離した = 単発クリック。再生の開始はこの時点で判断する。
+    // mousedown で再生を始めるとスクラブのたびに再生が走ってしまい、
+    // 逆に何もしないとクリックしてもシークできない、という両方の不具合が出る。
+    const wasClick = !didScrubRef.current && !enteredZoomModeRef.current;
+    enteredZoomModeRef.current = false;
+    didScrubRef.current = false;
+    if (wasClick) {
+      onTimeClick(lastSeekTimeRef.current, false);
+    }
+  }, [onTimeClick]);
 
   // マウスホイールで横スクロール（Shift+ホイール）またはズーム（Ctrl/Cmd/Alt+ホイール）
   const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
@@ -172,8 +235,6 @@ export function ModernTimeline({
       const containerRect = timelineContainerRef.current.getBoundingClientRect();
       const mouseX = e.clientX - containerRect.left;
       const scrollLeft = timelineContainerRef.current.scrollLeft;
-      // タイムラインの表示範囲を3秒延長しているため、totalDuration + 3を基準に計算
-      const extendedDuration = totalDuration + 3;
       const mouseTime = ((mouseX + scrollLeft) / timelineWidth) * extendedDuration;
       
       // ズーム量を計算（デルタに応じて、より滑らかに）
@@ -181,12 +242,14 @@ export function ModernTimeline({
       const zoomDelta = e.deltaY > 0 ? -zoomSpeed : zoomSpeed;
       const newZoom = Math.max(0.1, Math.min(5, zoom + zoomDelta));
       
-      // ズーム後のタイムライン幅
-      const newTimelineWidth = Math.max(800, totalDuration * 100 * newZoom);
-      
+      // ズーム後のタイムライン幅。幅の算出にもスクロール位置の逆算にも
+      // extendedDuration を使う。ここだけ totalDuration のままだったため、
+      // ズームするとカーソル位置が保持されず表示が飛んでいた。
+      const newTimelineWidth = Math.max(800, extendedDuration * 100 * newZoom);
+
       // マウス位置の時間を維持するようにスクロール位置を調整
-      const newScrollLeft = (mouseTime / totalDuration) * newTimelineWidth - mouseX;
-      
+      const newScrollLeft = (mouseTime / extendedDuration) * newTimelineWidth - mouseX;
+
       // デバウンス処理：連続したズーム操作をまとめて処理
       zoomUpdateTimeoutRef.current = setTimeout(() => {
         onZoomChange(newZoom);
@@ -338,17 +401,27 @@ export function ModernTimeline({
       // 長押しタイマーを開始（横方向ズームモードに入る）
       horizontalZoomTimerRef.current = setTimeout(() => {
         setIsHorizontalZoomDragging(true);
+        enteredZoomModeRef.current = true;
         horizontalZoomStartX.current = startX;
         horizontalZoomStartZoom.current = zoom;
         debug('[ModernTimeline] 横方向ズームモード開始');
       }, HORIZONTAL_ZOOM_LONG_PRESS_DELAY);
       
+      // 素のクリックでもその場でシークする（再生は mouseup 側で判断）。
+      // 以前はここで何もしていなかったため、マウスを動かさずにクリックしても
+      // 再生位置がまったく動かなかった。
+      didScrubRef.current = false;
+      lastSeekTimeRef.current = seekTimeFromClientX(e.clientX);
+      onTimeClick(lastSeekTimeRef.current, true);
+
       // 通常のドラッグも開始（ピン移動のために）
       setIsDragging(true);
     } else {
       // 修飾キーありのクリック処理
+      didScrubRef.current = false;
       setIsDragging(true);
-      handleTimelineClick(e);
+      handleTimelineClick(e, true);
+      lastSeekTimeRef.current = seekTimeFromClientX(e.clientX);
     }
   };
 
@@ -368,7 +441,6 @@ export function ModernTimeline({
       // マウス位置を基準にズーム
       const mouseX = e.clientX - containerRect.left;
       const scrollLeft = timelineContainerRef.current.scrollLeft;
-      const extendedDuration = totalDuration + 3;
       // 現在のタイムライン幅を使用（useMemoで計算された最新値）
       const currentTimelineWidth = Math.max(800, extendedDuration * 100 * zoom);
       const mouseTime = ((mouseX + scrollLeft) / currentTimelineWidth) * extendedDuration;
@@ -415,28 +487,20 @@ export function ModernTimeline({
     }
     
     // 通常のドラッグ（ピン移動）
-    if (isDragging && !resizingClipIndex && !isDraggingPin && !isHorizontalZoomDragging) {
-      // ピン移動を実行
-      handleTimelineClick(e);
+    // resizingClipIndex は 0 が falsy なため `!resizingClipIndex` では先頭クリップの
+    // リサイズ中だけガードが外れる。明示的に null と比較する。
+    if (isDragging && resizingClipIndex === null && !isDraggingPin && !isHorizontalZoomDragging) {
+      // スクラブ中は再生を開始しない（第2引数 true）。
+      didScrubRef.current = true;
+      lastSeekTimeRef.current = seekTimeFromClientX(e.clientX);
+      onTimeClick(lastSeekTimeRef.current, true);
     }
   };
 
   const handleMouseUp = () => {
-    // 横方向ズームタイマーをクリア
-    if (horizontalZoomTimerRef.current) {
-      clearTimeout(horizontalZoomTimerRef.current);
-      horizontalZoomTimerRef.current = null;
-    }
-    
-    // 横方向ズームモードを終了
-    setIsHorizontalZoomDragging(false);
-    horizontalZoomMouseDownPositionRef.current = null;
-    
-    // 通常のドラッグを終了
-    setIsDragging(false);
+    endTimelineDrag();
     if (resizingClipIndex !== null) {
       setResizingClipIndex(null);
-      setResizeHandle(null);
     }
   };
 
@@ -449,7 +513,6 @@ export function ModernTimeline({
     const startTime = clipStartTimes[clipIndex];
     
     setResizingClipIndex(clipIndex);
-    setResizeHandle(handle);
     resizeStartTime.current = startTime;
     resizeStartDuration.current = clip.duration || 3;
     
@@ -464,14 +527,7 @@ export function ModernTimeline({
         return;
       }
 
-      const containerRect = timelineContainerRef.current.getBoundingClientRect();
-      const timelineRect = timelineRef.current.getBoundingClientRect();
-      // スクロール位置を考慮した相対位置
-      const x = e.clientX - containerRect.left + timelineContainerRef.current.scrollLeft;
-      const percentage = x / timelineRect.width;
-      // タイムラインの表示範囲を3秒延長しているため、totalDuration + 3を基準に計算
-      const extendedDuration = totalDuration + 3;
-      const time = percentage * extendedDuration;
+      const time = timeFromClientX(e.clientX);
 
       // ドラッグ開始時に refs に保存しておいた original duration を基準に計算する。
       // これによりクリップ更新後も「右端を固定したまま左端を動かす」幾何が安定する。
@@ -482,19 +538,20 @@ export function ModernTimeline({
         // 右端をリサイズ: 長さを変更
         const newDuration = Math.max(0.1, Math.min(60, time - originalStartTime));
         if (newDuration > 0.1) {
-          onClipEdit(clipIndex, { duration: newDuration });
+          onClipEdit(clipIndex, { duration: newDuration }, { transient: true });
         }
       } else {
         // 左端をリサイズ: 長さを変更（開始位置は変更しない）
         const rightEdge = originalStartTime + originalDuration;
         const newDuration = Math.max(0.1, Math.min(60, rightEdge - time));
         if (newDuration > 0.1 && time < rightEdge) {
-          onClipEdit(clipIndex, { duration: newDuration });
+          onClipEdit(clipIndex, { duration: newDuration }, { transient: true });
         }
       }
     }, () => {
+      // ドラッグ確定。ここで初めて履歴を1件積む。
+      onClipEditCommit?.();
       setResizingClipIndex(null);
-      setResizeHandle(null);
     });
   };
 
@@ -507,7 +564,6 @@ export function ModernTimeline({
     if (!subtitle) return;
     
     setResizingSubtitleId(subtitleId);
-    setSubtitleResizeHandle(handle);
     subtitleResizeStartTime.current = subtitle.startTime;
     subtitleResizeStartEndTime.current = subtitle.endTime;
     
@@ -519,17 +575,11 @@ export function ModernTimeline({
         return;
       }
 
-      const containerRect = timelineContainerRef.current.getBoundingClientRect();
-      const timelineRect = timelineRef.current.getBoundingClientRect();
-      const x = e.clientX - containerRect.left + timelineContainerRef.current.scrollLeft;
-      const percentage = x / timelineRect.width;
-      // レイアウトは extendedDuration (= totalDuration + 3) を基準に描画しているため、ポインタ→時刻の逆変換も同じ分母を使う。totalDuration で割ると掴んだ位置より手前にずれ、終端ほど誤差が広がっていた。
-      const extendedDuration = totalDuration + 3;
-      const time = Math.max(0, Math.min(totalDuration, percentage * extendedDuration));
-      
+      const time = seekTimeFromClientX(e.clientX);
+
       const currentSubtitle = subtitles.find(s => s.id === subtitleId);
       if (!currentSubtitle) return;
-      
+
       if (handle === 'right') {
         // 右端をリサイズ: 終了時間を変更
         const newEndTime = Math.max(subtitleResizeStartTime.current + 0.1, Math.min(totalDuration, time));
@@ -559,7 +609,6 @@ export function ModernTimeline({
       }
     }, () => {
       setResizingSubtitleId(null);
-      setSubtitleResizeHandle(null);
     });
   };
 
@@ -569,21 +618,15 @@ export function ModernTimeline({
     e.preventDefault();
     
     // リサイズ中や他の操作中はドラッグを無視
-    if (resizingSubtitleId || resizingClipIndex || isDraggingPin) return;
+    if (resizingSubtitleId || resizingClipIndex !== null || isDraggingPin) return;
     
     const subtitle = subtitles.find(s => s.id === subtitleId);
     if (!subtitle) return;
     
     if (!timelineRef.current || !timelineContainerRef.current) return;
-    
-    const containerRect = timelineContainerRef.current.getBoundingClientRect();
-    const timelineRect = timelineRef.current.getBoundingClientRect();
-    const x = e.clientX - containerRect.left + timelineContainerRef.current.scrollLeft;
-    const percentage = x / timelineRect.width;
-    // タイムラインの表示範囲を3秒延長しているため、totalDuration + 3を基準に計算
-    const extendedDuration = totalDuration + 3;
-    const clickTime = percentage * extendedDuration;
-    
+
+    const clickTime = timeFromClientX(e.clientX);
+
     setDraggingSubtitleId(subtitleId);
     subtitleDragStartTime.current = subtitle.startTime;
     subtitleDragStartOffset.current = subtitle.startTime - clickTime; // クリック位置からのオフセット（開始時間とクリック位置の差）
@@ -596,17 +639,11 @@ export function ModernTimeline({
         return;
       }
 
-      const containerRect = timelineContainerRef.current.getBoundingClientRect();
-      const timelineRect = timelineRef.current.getBoundingClientRect();
-      const x = e.clientX - containerRect.left + timelineContainerRef.current.scrollLeft;
-      const percentage = x / timelineRect.width;
-      // レイアウトは extendedDuration (= totalDuration + 3) を基準に描画しているため、ポインタ→時刻の逆変換も同じ分母を使う。totalDuration で割ると掴んだ位置より手前にずれ、終端ほど誤差が広がっていた。
-      const extendedDuration = totalDuration + 3;
-      const time = Math.max(0, Math.min(totalDuration, percentage * extendedDuration));
-      
+      const time = seekTimeFromClientX(e.clientX);
+
       const currentSubtitle = subtitles.find(s => s.id === subtitleId);
       if (!currentSubtitle) return;
-      
+
       // クリック位置からのオフセットを考慮して新しい開始時間を計算
       const newStartTime = Math.max(0, Math.min(totalDuration, time + subtitleDragStartOffset.current));
       // 字幕の長さを保持
@@ -665,26 +702,18 @@ export function ModernTimeline({
       const handleGlobalMouseMove = (e: MouseEvent) => {
         // ピンがドラッグ中でないことを再確認（クロージャ内で最新の値を確認）
         if (isDraggingPin) return;
-        
-        if (timelineRef.current && timelineContainerRef.current) {
-          const containerRect = timelineContainerRef.current.getBoundingClientRect();
-          const timelineRect = timelineRef.current.getBoundingClientRect();
-          // スクロール位置を考慮した相対位置
-          const x = e.clientX - containerRect.left + timelineContainerRef.current.scrollLeft;
-          const percentage = x / timelineRect.width;
-          // タイムラインの表示範囲を3秒延長しているため、totalDuration + 3を基準に計算
-      const extendedDuration = totalDuration + 3;
-      const time = percentage * extendedDuration;
-          const clampedTime = Math.max(0, Math.min(time, totalDuration));
-          // 0秒でない場合のみ移動
-          if (clampedTime > 0 || time === 0) {
-            onTimeClick(clampedTime);
-          }
-        }
+
+        // スクラブ中は再生を開始しない（第2引数 true）。以前は既定値の false で
+        // 呼んでいたため、ドラッグのサンプルごとに再生が走っていた。
+        didScrubRef.current = true;
+        lastSeekTimeRef.current = seekTimeFromClientX(e.clientX);
+        onTimeClick(lastSeekTimeRef.current, true);
       };
 
+      // タイムラインの外で離された場合もここを通る。長押しズームのタイマーを
+      // 確実に片付けるため、専用の後始末関数を呼ぶ。
       const handleGlobalMouseUp = () => {
-        setIsDragging(false);
+        endTimelineDrag();
       };
 
       window.addEventListener('mousemove', handleGlobalMouseMove);
@@ -695,7 +724,7 @@ export function ModernTimeline({
         window.removeEventListener('mouseup', handleGlobalMouseUp);
       };
     }
-  }, [isDragging, isDraggingPin, totalDuration, onTimeClick]);
+  }, [isDragging, isDraggingPin, onTimeClick, seekTimeFromClientX, endTimelineDrag]);
 
   return (
     <div className="px-6 py-2">
@@ -724,15 +753,6 @@ export function ModernTimeline({
           setIsZoomDragging(true);
           zoomStartY.current = e.clientY;
           zoomStartZoom.current = zoom;
-          
-          // マウス位置を基準にズームするため、開始位置を記録
-          if (timelineRef.current && timelineContainerRef.current) {
-            const containerRect = timelineContainerRef.current.getBoundingClientRect();
-            const mouseX = e.clientX - containerRect.left;
-            const scrollLeft = timelineContainerRef.current.scrollLeft;
-            zoomStartY.current = e.clientY;
-            zoomStartZoom.current = zoom;
-          }
         }}
         onMouseMove={(e) => {
           if (isZoomDragging) {
@@ -756,15 +776,14 @@ export function ModernTimeline({
               const containerRect = timelineContainerRef.current!.getBoundingClientRect();
               const mouseX = e.clientX - containerRect.left;
               const scrollLeft = timelineContainerRef.current!.scrollLeft;
-              // タイムラインの表示範囲を3秒延長しているため、totalDuration + 3を基準に計算
-      const extendedDuration = totalDuration + 3;
-      const mouseTime = ((mouseX + scrollLeft) / timelineWidth) * extendedDuration;
-              
+              // レイアウトと同じ extendedDuration を分母に使う。
+              const mouseTime = ((mouseX + scrollLeft) / timelineWidth) * extendedDuration;
+
               // ズーム後のタイムライン幅
-              const newTimelineWidth = Math.max(800, totalDuration * 100 * newZoom);
-              
+              const newTimelineWidth = Math.max(800, extendedDuration * 100 * newZoom);
+
               // マウス位置の時間を維持するようにスクロール位置を調整
-              const newScrollLeft = (mouseTime / totalDuration) * newTimelineWidth - mouseX;
+              const newScrollLeft = (mouseTime / extendedDuration) * newTimelineWidth - mouseX;
               
               // デバウンス処理：連続したズーム操作をまとめて処理
               if (zoomUpdateTimeoutRef.current) {
@@ -815,7 +834,7 @@ export function ModernTimeline({
             className="absolute top-0 bottom-0 w-1 bg-red-500 z-50 cursor-grab active:cursor-grabbing shadow-lg shadow-red-500/50 hover:w-1.5 transition-all pointer-events-auto"
             style={{
               // タイムラインの表示範囲を3秒延長しているため、totalDuration + 3を基準に計算
-              left: `${(currentTime / (totalDuration + 3)) * 100}%`,
+              left: `${(currentTime / extendedDuration) * 100}%`,
               transform: 'translateX(-50%)',
             }}
             onMouseDown={(e) => {
@@ -856,15 +875,8 @@ export function ModernTimeline({
                 }
 
                 if (!timelineRef.current || !timelineContainerRef.current) return;
-                const containerRect = timelineContainerRef.current.getBoundingClientRect();
-                const timelineRect = timelineRef.current.getBoundingClientRect();
-                // スクロール位置を考慮した相対位置
-                const x = e.clientX - containerRect.left + timelineContainerRef.current.scrollLeft;
-                const percentage = x / timelineRect.width;
-                // レイアウトは extendedDuration (= totalDuration + 3) を基準に描画しているため、ポインタ→時刻の逆変換も同じ分母を使う。totalDuration で割ると掴んだ位置より手前にずれ、終端ほど誤差が広がっていた。
-                const extendedDuration = totalDuration + 3;
-                const newTime = Math.max(0, Math.min(totalDuration, percentage * extendedDuration));
-                
+                const newTime = seekTimeFromClientX(e.clientX);
+
                 // 時間が有効な場合のみ移動（0秒でない、または意図的に0秒の場合）
                 if (newTime >= 0 && newTime <= totalDuration) {
                   onTimeClick(newTime, true); // ピンドラッグ中であることを伝える
@@ -887,7 +899,6 @@ export function ModernTimeline({
           {/* タイムラインの表示範囲を3秒延長しているため、totalDuration + 3まで表示 */}
           {Array.from({ length: Math.ceil(totalDuration) + 4 }).map((_, i) => {
             const time = i;
-            const extendedDuration = totalDuration + 3;
             const percent = extendedDuration > 0 ? (time / extendedDuration) * 100 : 0;
             return (
               <div
@@ -922,7 +933,6 @@ export function ModernTimeline({
             if (totalDuration === 0) return null;
             
             // タイムラインの表示範囲を3秒延長しているため、totalDuration + 3を基準に計算
-            const extendedDuration = totalDuration + 3;
             const startPercent = extendedDuration > 0 ? (subtitle.startTime / extendedDuration) * 100 : 0;
             const duration = subtitle.endTime - subtitle.startTime;
             const widthPercent = extendedDuration > 0 ? (duration / extendedDuration) * 100 : 0;
@@ -1045,7 +1055,6 @@ export function ModernTimeline({
           const startTime = clipStartTimes[index] ?? 0;
           const clipDuration = clip.duration || 3;
           // タイムラインの表示範囲を3秒延長しているため、totalDuration + 3を基準に計算
-          const extendedDuration = totalDuration + 3;
           const startPercent = extendedDuration > 0 ? (startTime / extendedDuration) * 100 : 0;
           const widthPercent = extendedDuration > 0 ? (clipDuration / extendedDuration) * 100 : 0;
           const isSelected = selectedClipIndices.includes(index);
@@ -1075,7 +1084,10 @@ export function ModernTimeline({
                   const dragImage = document.createElement('div');
                   dragImage.style.position = 'absolute';
                   dragImage.style.top = '-1000px';
-                  dragImage.innerHTML = clip.plotName || t('timeline.sceneDefaultName', { number: index + 1 });
+                  // textContent で入れること。plotName はユーザーが自由に編集でき、
+                  // レンダーAPIを往復して戻ってくる値なので、innerHTML だと
+                  // `<img src=x onerror=...>` がドラッグ時に実行されてしまう。
+                  dragImage.textContent = clip.plotName || t('timeline.sceneDefaultName', { number: index + 1 });
                   document.body.appendChild(dragImage);
                   e.dataTransfer.setDragImage(dragImage, 0, 0);
                   setTimeout(() => document.body.removeChild(dragImage), 0);
@@ -1090,15 +1102,8 @@ export function ModernTimeline({
                 
                 // ドロップ位置を計算
                 if (timelineRef.current && timelineContainerRef.current) {
-                  const containerRect = timelineContainerRef.current.getBoundingClientRect();
-                  const timelineRect = timelineRef.current.getBoundingClientRect();
-                  // スクロール位置を考慮した相対位置
-                  const x = e.clientX - containerRect.left + timelineContainerRef.current.scrollLeft;
-                  const percentage = x / timelineRect.width;
-                  // タイムラインの表示範囲を3秒延長しているため、totalDuration + 3を基準に計算
-                  const extendedDuration = totalDuration + 3;
-                  const time = percentage * extendedDuration;
-                  
+                  const time = timeFromClientX(e.clientX);
+
                   // どのクリップの前にドロップするかを判定
                   let targetIndex = index;
                   const clipCenter = startTime + clipDuration / 2;
@@ -1240,8 +1245,8 @@ export function ModernTimeline({
                 : 'border-[rgba(255,255,255,0.3)] text-gray-400 hover:border-indigo-400 hover:text-indigo-400 hover:bg-indigo-400/10'
             }`}
             style={{
-              left: `${(totalDuration / (totalDuration + 3)) * 100}%`,
-              width: `${(3 / (totalDuration + 3)) * 100}%`,
+              left: `${(totalDuration / extendedDuration) * 100}%`,
+              width: `${(TIMELINE_TAIL_SECONDS / extendedDuration) * 100}%`,
               minWidth: '80px',
             }}
             title={t('timeline.addSceneTooltip')}
@@ -1265,10 +1270,13 @@ export function ModernTimeline({
           <div
             className="absolute top-8 bottom-2 w-1 bg-yellow-400 z-50 pointer-events-none shadow-lg"
             style={{
+              // 他のクリップ・字幕の矩形はすべて extendedDuration を分母に
+              // 描画している。ここだけ totalDuration だったため、挿入位置を示す
+              // 線が実際の位置より右にずれて表示されていた。
               left: dragOverIndex === 0
                 ? '0%'
                 : dragOverIndex < clips.length
-                ? `${(clipStartTimes[dragOverIndex] / totalDuration) * 100}%`
+                ? `${(clipStartTimes[dragOverIndex] / extendedDuration) * 100}%`
                 : '100%',
             }}
           />
@@ -1351,7 +1359,7 @@ export function ModernTimeline({
             className="absolute top-0 bottom-0 w-1 bg-red-500 z-20 pointer-events-none shadow-lg"
             style={{
               // タイムラインの表示範囲を3秒延長しているため、totalDuration + 3を基準に計算
-              left: `${Math.max(0, Math.min(100, (currentTime / (totalDuration + 3)) * 100))}%`,
+              left: `${Math.max(0, Math.min(100, (currentTime / extendedDuration) * 100))}%`,
             }}
           >
             <div className="absolute -top-2 -left-2 w-5 h-5 bg-red-500 rounded-full border-2 border-white shadow-lg"></div>

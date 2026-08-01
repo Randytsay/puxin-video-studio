@@ -10,7 +10,7 @@
 // (missing lineHeight, letterSpacing, textTransform, textShadow and the text
 // stroke). Keeping a single implementation is what stops that recurring.
 
-import type { RefObject } from 'react';
+import { useEffect, type RefObject } from 'react';
 import type { Subtitle } from '@/src/types';
 
 interface SubtitlePreviewOverlayProps {
@@ -36,6 +36,13 @@ export function SubtitlePreviewOverlay({
   onSubtitleEdit,
   onSubtitlePreviewDragStart,
 }: SubtitlePreviewOverlayProps) {
+  // 編集を開始したときに一度だけ全選択する。以前は ref コールバックの中で
+  // select() を呼んでいたため、キー入力ごとに再選択されていた。
+  useEffect(() => {
+    if (!editingSubtitleText) return;
+    subtitleTextInputRef.current?.select();
+  }, [editingSubtitleText, subtitleTextInputRef]);
+
   if (!subtitles || subtitles.length === 0) return null;
 
   return (
@@ -163,13 +170,13 @@ export function SubtitlePreviewOverlay({
             >
               {isEditing ? (
                 <input
-                  ref={(el) => {
-                    subtitleTextInputRef.current = el;
-                    if (el) {
-                      el.focus();
-                      el.select();
-                    }
-                  }}
+                  // ref に focus/select を書かないこと。インライン arrow の ref は
+                  // レンダーごとに別の識別子になるため React が毎回付け直し、
+                  // 1文字入力するたびに全選択が走って次の文字が既存文字列を
+                  // 置き換えていた（"abc" と打つと "c" だけ残る）。
+                  // 選択は「編集開始時に一度だけ」で十分なので効果に移す。
+                  ref={subtitleTextInputRef}
+                  autoFocus
                   type="text"
                   value={activeSubtitle.text}
                   onChange={(e) => onSubtitleEdit(activeSubtitle.id, { text: e.target.value })}

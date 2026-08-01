@@ -63,6 +63,10 @@ jobs:
         if: always()
         run: npm run build
 
+      # A ratchet, not a target. `npm run lint` on its own always exits 0 while
+      # warnings accumulate, so the step was green with 127 findings — including
+      # real React Compiler bugs. The ceiling only ever moves down: lower it
+      # whenever you clear warnings, and never raise it to make CI pass.
       - name: Lint
         if: always()
-        run: npm run lint
+        run: npm run lint -- --max-warnings 94

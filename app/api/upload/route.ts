@@ -3,10 +3,15 @@ import { writeFile, mkdir } from 'fs/promises';
 import path from 'path';
 import { detectMediaKind, type MediaKind } from './detect';
 import { sweepUploadsInBackground } from '@/lib/utils/retention';
+import { logError } from '@/lib/utils/logger';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+// Must stay <= `proxyClientMaxBodySize` in next.config.ts. Next clones the
+// request body for every route covered by a proxy/middleware and *truncates*
+// (does not reject) anything over that limit, which would surface here as an
+// unparseable multipart body rather than the clean 413 below.
 const MAX_FILE_SIZE = 100 * 1024 * 1024;
 
 /**
@@ -85,7 +90,18 @@ export async function POST(request: NextRequest) {
       size: file.size,
     });
   } catch (err) {
+    // A body larger than `proxyClientMaxBodySize` is truncated upstream rather
+    // than rejected, so formData() throws mid-parse. Report that as a 413 the
+    // client can explain, and keep filesystem paths out of the response.
     const message = err instanceof Error ? err.message : String(err);
-    return NextResponse.json({ error: `Upload failed: ${message}` }, { status: 500 });
+    if (/multipart|boundary|malformed|unexpected end/i.test(message)) {
+      return NextResponse.json(
+        { error: `Upload was truncated or malformed. Files must be under ${MAX_FILE_SIZE / (1024 * 1024)}MB.` },
+        { status: 413 },
+      );
+    }
+    const errorId = Math.random().toString(36).slice(2, 10);
+    logError(`[upload:${errorId}] upload failed`, err);
+    return NextResponse.json({ error: `Upload failed. Reference: ${errorId}` }, { status: 500 });
   }
 }

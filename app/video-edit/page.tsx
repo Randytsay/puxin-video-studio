@@ -4,8 +4,8 @@ import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useTranslations } from 'next-intl';
 import { useAppStore } from '@/lib/store';
-import { VideoEditor } from '@/components/VideoEditor';
-import type { VideoClip, Subtitle, VideoResolution } from '@/src/types';
+import { VideoEditor, type ExportPayload } from '@/components/VideoEditor';
+import type { Subtitle, VideoResolution } from '@/src/types';
 
 type RenderPhase =
   | 'idle'
@@ -53,8 +53,6 @@ export default function VideoEditPage() {
     message: '',
   });
   const [renderError, setRenderError] = useState<string | null>(null);
-  const [, setBgmStartTime] = useState(0);
-  const [, setBgmEndTime] = useState<number | null>(null);
 
   useEffect(() => {
     setMounted(true);
@@ -72,7 +70,12 @@ export default function VideoEditPage() {
     }
   }, [mounted, router]);
 
-  const handleExport = async (exportResolution: VideoResolution) => {
+  // The editor hands us its live subtitles and BGM trim. Reading them from this
+  // component's state instead only worked if the user had pressed Save first,
+  // so a straight edit-then-export dropped both from the rendered video.
+  const handleExport = async (exportResolution: VideoResolution, payload: ExportPayload) => {
+    const { subtitles: exportSubtitles, bgmStartTime, bgmEndTime } = payload;
+    setSubtitles(exportSubtitles);
     setRendering(true);
     setRenderError(null);
     setRenderStatus({
@@ -87,9 +90,11 @@ export default function VideoEditPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           clips,
-          subtitles,
+          subtitles: exportSubtitles,
           bgmUrl,
           bgmVolume,
+          bgmStartTime,
+          bgmEndTime,
           resolution: exportResolution,
           aspectRatio: videoAspectRatio,
           productName: productData?.name,
@@ -268,8 +273,6 @@ export default function VideoEditPage() {
         bgmVolume={bgmVolume}
         onBgmUrlChange={setBgmUrl}
         onBgmVolumeChange={setBgmVolume}
-        onBgmStartTimeChange={setBgmStartTime}
-        onBgmEndTimeChange={setBgmEndTime}
         onClipsChange={setClips}
         onExport={handleExport}
         onSaveDraft={handleSaveDraft}

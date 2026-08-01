@@ -9,7 +9,7 @@
 // to thread them through. Handlers are accepted as props because they wrap
 // player ref + clip state + parent callbacks.
 
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useTranslations } from 'next-intl';
 import { useEditorStore } from '@/lib/editorStore';
 import type { VideoClip, Subtitle } from '@/src/types';
@@ -84,8 +84,31 @@ export function useKeyboardShortcuts(
   const setShowExportDialog = useEditorStore((s) => s.setShowExportDialog);
   const setShowShortcuts = useEditorStore((s) => s.setShowShortcuts);
 
+  // `handlers` と `ctx` は VideoEditor のレンダー内で毎回作られるオブジェクト
+  // リテラルで、`currentTime` は再生中 20回/秒 更新される。これらを依存配列に
+  // 並べると window の keydown リスナーが実質毎レンダー付け外しされる。
+  // 最新値は ref 経由で読み、リスナー自体は一度だけ登録する。
+  const latestRef = useRef({
+    handlers, ctx, t,
+    currentTime, selectedClipIndices, selectedSubtitleIds, activePanel,
+    showExportDialog, showShortcuts,
+  });
+  useEffect(() => {
+    latestRef.current = {
+      handlers, ctx, t,
+      currentTime, selectedClipIndices, selectedSubtitleIds, activePanel,
+      showExportDialog, showShortcuts,
+    };
+  });
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      const {
+        handlers, ctx, t,
+        currentTime, selectedClipIndices, selectedSubtitleIds, activePanel,
+        showExportDialog, showShortcuts,
+      } = latestRef.current;
+
       // 入力フィールドにフォーカスがある場合は無視
       if (
         e.target instanceof HTMLInputElement ||
@@ -283,10 +306,9 @@ export function useKeyboardShortcuts(
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
+    // zustand のセッターは同一参照が保たれるためクロージャで直接読んでよい。
+    // それ以外の可変値は latestRef 経由なので、依存は空でよい。
   }, [
-    handlers, ctx, t,
-    currentTime, selectedClipIndices, selectedSubtitleIds, activePanel,
-    showExportDialog, showShortcuts,
     setSelectedClipIndices, setSelectedSubtitleIds, setActivePanel,
     setShowExportDialog, setShowShortcuts,
   ]);
