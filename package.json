@@ -21,6 +21,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "i18n:check": "node scripts/check-i18n.mjs",
+    "mcp": "node scripts/mcp-server.mjs",
     "remotion:studio": "remotion studio",
     "remotion:render": "remotion render"
   },

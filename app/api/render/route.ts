@@ -18,9 +18,11 @@ function isUserCancelledRender(err: unknown): boolean {
     err.message.includes('renderMedia() got cancelled')
   );
 }
-import type { VideoClip, Subtitle, VideoResolution, VideoAspectRatio } from '@/src/types';
+import { validateProject } from '@/lib/project/validate';
+import { getRenderOrigin, resolveMediaUrl } from '@/lib/project/media';
 import { createRateLimiter, getClientIp } from './rate-limit';
 import { sweepUploadsInBackground } from '@/lib/utils/retention';
+import { logError } from '@/lib/utils/logger';
 
 // Default location where Remotion caches the Chrome headless shell. If this
 // directory exists we can assume the browser is already downloaded and shrink
@@ -102,16 +104,11 @@ const rateLimiter = createRateLimiter({
   max: RATE_LIMIT_MAX,
 });
 
-interface RenderBody {
-  clips: VideoClip[];
-  subtitles?: Subtitle[];
-  bgmUrl?: string | null;
-  bgmVolume?: number;
-  resolution: VideoResolution;
-  aspectRatio: VideoAspectRatio;
-  productName?: string;
-  audioEnabled?: boolean;
-}
+// Body validation — structural rules and resource ceilings both live in
+// lib/project/validate.ts, shared with POST /api/project/validate so a
+// dry-run against that endpoint is an exact predictor of what this one
+// accepts. Only the media-URL origin policy stays here (it depends on the
+// deployment's origin, see resolveMediaUrl below).
 
 // NDJSON progress events streamed from /api/render.
 // The final event is either `done` or `error`.
@@ -125,43 +122,6 @@ type RenderEvent =
   | { type: 'progress'; phase: ProgressPhase; progress: number; message: string }
   | { type: 'done'; videoUrl: string; filename: string }
   | { type: 'error'; error: string };
-
-/**
- * Hosts the renderer may fetch absolute URLs from, beyond its own origin.
- * Comma-separated, e.g. RENDER_ALLOWED_MEDIA_HOSTS="cdn.example.com,img.example.com".
- * Empty by default: absolute URLs are rejected unless explicitly allowed.
- */
-const ALLOWED_MEDIA_HOSTS = (process.env.RENDER_ALLOWED_MEDIA_HOSTS ?? '')
-  .split(',')
-  .map((h) => h.trim().toLowerCase())
-  .filter(Boolean);
-
-/**
- * Resolve a client-supplied media reference into a URL the headless browser is
- * allowed to fetch. Returns null when the reference is not permitted.
- *
- * Absolute URLs are gated because inputProps are fetched by Chromium from the
- * *server's* network position: an unfiltered `http://169.254.169.254/...` would
- * pull cloud instance metadata into the rendered mp4, which the caller then
- * downloads. Relative paths stay safe — they are pinned to our own origin.
- */
-function resolveMediaUrl(url: string | null | undefined, origin: string): string | null {
-  if (!url) return null;
-  if (url.startsWith('/')) return `${origin}${url}`;
-
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return null;
-  }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
-
-  const host = parsed.hostname.toLowerCase();
-  if (host === new URL(origin).hostname.toLowerCase()) return parsed.toString();
-  if (ALLOWED_MEDIA_HOSTS.includes(host)) return parsed.toString();
-  return null;
-}
 
 export async function POST(request: NextRequest) {
   // Rate-limit / concurrency / body-validation all respond with plain JSON.
@@ -178,30 +138,61 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  // Reserve the concurrency slot *before* the first await. Checking here and
+  // incrementing after `await request.json()` left a window in which every
+  // concurrent request observed activeRenders === 0 and passed, so N Chromium
+  // + ffmpeg pairs spawned against a cap of 1.
   if (activeRenders >= MAX_CONCURRENT_RENDERS) {
     return NextResponse.json(
       { error: 'Render server is busy. Try again in a moment.' },
       { status: 503, headers: { 'Retry-After': '30' } },
     );
   }
+  activeRenders++;
+  let slotReleased = false;
+  const releaseSlot = () => {
+    if (slotReleased) return;
+    slotReleased = true;
+    activeRenders--;
+  };
 
-  let body: RenderBody;
+  let body: unknown;
   try {
-    body = (await request.json()) as RenderBody;
+    body = await request.json();
   } catch {
+    releaseSlot();
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const { clips, subtitles = [], bgmUrl, bgmVolume, resolution, aspectRatio, productName, audioEnabled = true } = body;
-
-  if (!Array.isArray(clips) || clips.length === 0) {
-    return NextResponse.json({ error: 'clips is required and must be non-empty' }, { status: 400 });
+  const validation = validateProject(body);
+  if (!validation.ok) {
+    releaseSlot();
+    return NextResponse.json(
+      {
+        error: validation.errors
+          .map((e) => (e.path ? `${e.path}: ${e.message}` : e.message))
+          .join('; '),
+        errors: validation.errors,
+        warnings: validation.warnings,
+      },
+      { status: 400 },
+    );
   }
-  if (!resolution || !aspectRatio) {
-    return NextResponse.json({ error: 'resolution and aspectRatio are required' }, { status: 400 });
-  }
 
-  const origin = request.nextUrl.origin;
+  const {
+    clips,
+    subtitles,
+    bgmUrl,
+    bgmVolume,
+    bgmStartTime,
+    bgmEndTime,
+    resolution,
+    aspectRatio,
+    productName,
+    audioEnabled,
+  } = validation.project;
+
+  const origin = getRenderOrigin();
 
   // Reject rather than silently drop: a disallowed URL that resolved to null
   // would render a blank frame or a silent clip with no explanation.
@@ -221,6 +212,7 @@ export async function POST(request: NextRequest) {
   const resolvedBgmUrl = resolveOrReject(bgmUrl);
 
   if (rejected.length > 0) {
+    releaseSlot();
     return NextResponse.json(
       {
         error:
@@ -240,13 +232,16 @@ export async function POST(request: NextRequest) {
     audioEnabled,
     subtitles,
     bgmUrl: resolvedBgmUrl,
-    bgmVolume: bgmVolume ?? 0.3,
+    bgmVolume,
+    // BGM trim was accepted by the editor UI but never forwarded, so every
+    // export played the BGM file from 0 regardless of the trim handles.
+    bgmStartTime,
+    bgmEndTime,
   };
 
   const outputName = `output-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mp4`;
   const outputLocation = path.join(process.cwd(), 'public', 'uploads', 'output', outputName);
 
-  activeRenders++;
   const encoder = new TextEncoder();
 
   // Progress bar budget. Determined once per request, not hardcoded.
@@ -354,10 +349,17 @@ export async function POST(request: NextRequest) {
           // Client disconnected; renderMedia aborted cleanly. Not a failure.
           return;
         }
-        const message = err instanceof Error ? err.message : String(err);
-        send({ type: 'error', error: `Render failed: ${message}` });
+        // Remotion/ffmpeg failures embed absolute filesystem paths, webpack
+        // module ids and full ffmpeg invocations. That detail belongs in the
+        // server log, not in an unauthenticated client's error toast.
+        const errorId = Math.random().toString(36).slice(2, 10);
+        logError(`[render:${errorId}] render failed`, err);
+        send({
+          type: 'error',
+          error: `Render failed. Reference: ${errorId}`,
+        });
       } finally {
-        activeRenders--;
+        releaseSlot();
         // Expire old uploads/outputs. Self-throttling; not awaited so it
         // cannot hold the stream open.
         void sweepUploadsInBackground();
