@@ -25,7 +25,8 @@ Open http://localhost:3000. No environment variables are required for local deve
 |---|---|
 | `npm run dev` | Dev server with HMR |
 | `npm run build` | Production build |
-| `npm run lint` | ESLint |
+| `npm run lint` | ESLint (CI enforces a warning ceiling that only moves down) |
+| `npm test` | Vitest suite — API routes, project validation, timeline maths, stores, component smoke tests |
 | `npx tsc --noEmit` | Type-check (we keep this at zero errors) |
 
 **Type-check must pass before you open a PR.** Run `npx tsc --noEmit` locally.
@@ -79,7 +80,7 @@ Open http://localhost:3000. No environment variables are required for local deve
 4. Add a button in `components/LanguageSwitcher.tsx`.
 5. Open a PR. In the description, mention your native fluency level for reviewer context.
 
-Run `npm run i18n:check` before opening the PR — it diffs key sets across every `messages/*.json` and will flag anything you missed.
+Run `npm run i18n:check` before opening the PR — it diffs key sets across every `messages/*.json`, verifies every `t('…')` key referenced in code exists, and will flag anything you missed.
 
 ## Writing a good PR
 
@@ -87,7 +88,7 @@ Run `npm run i18n:check` before opening the PR — it diffs key sets across ever
 - **Description**: what, why, how. Include a screenshot or short screencap for UI changes.
 - **Check the boxes** in the PR template (`PULL_REQUEST_TEMPLATE.md`).
 - **Rebase over merge** where possible — keep history linear.
-- **Run `npx tsc --noEmit` and `npm run lint` before pushing.** PRs with red CI tend to stall.
+- **Run `npx tsc --noEmit`, `npm test`, and `npm run lint` before pushing.** CI enforces a lint-warning ceiling that only ratchets down — don't add new warnings. PRs with red CI tend to stall.
 
 ## Reporting bugs
 
@@ -108,7 +109,7 @@ Use the **Feature request** issue template. Describe the problem first, the prop
 
 ## Code of conduct
 
-This project follows the [Contributor Covenant](../CODE_OF_CONDUCT.md). Be kind; disagreements happen in public; moderation happens in private.
+Be kind; disagreements happen in public; moderation happens in private. Harassment, personal attacks, and bad-faith participation are not welcome, and maintainers may close or lock threads that go that way.
 
 ## License
 
