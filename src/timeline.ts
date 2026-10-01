@@ -23,15 +23,11 @@ export const VIDEO_FPS = 30;
 export const DEFAULT_CLIP_DURATION_SECONDS = 3.0;
 
 /**
- * Narration is played faster than real time while the scene still lasts
- * `clip.duration` seconds of timeline. Consequently one second of timeline
- * consumes NARRATION_PLAYBACK_RATE seconds of the audio file, and any code
- * converting a timeline offset into an `audioStartTime` (which is measured in
- * the audio file's own timebase) must scale by this factor. Cutting a clip at
- * t seconds used to set `audioStartTime += t`, which replayed ~20% of the
- * narration at the start of the second half.
+ * Puxin narration defaults to natural 1.0x playback. Keeping this as an
+ * explicit constant preserves one timebase conversion path if voice presets
+ * later expose adjustable playback speed.
  */
-export const NARRATION_PLAYBACK_RATE = 1.2;
+export const NARRATION_PLAYBACK_RATE = 1.0;
 
 /** Timeline seconds → seconds consumed of the narration audio file. */
 export function timelineToAudioOffset(timelineSeconds: number): number {

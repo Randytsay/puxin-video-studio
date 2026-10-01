@@ -207,6 +207,7 @@ describe('published schema stays in sync with the validator', () => {
     expect(schema.properties.resolution.enum).toEqual([...PROJECT_ENUMS.resolutions]);
     expect(schema.properties.aspectRatio.enum).toEqual([...PROJECT_ENUMS.aspectRatios]);
     expect(schema.$defs.clip.properties.imageEffect.enum).toEqual([...PROJECT_ENUMS.imageEffects]);
+    expect(schema.$defs.clip.properties.sceneLayout.enum).toEqual([...PROJECT_ENUMS.sceneLayouts]);
     expect(schema.$defs.clip.properties.transitionType.enum).toEqual([...PROJECT_ENUMS.transitions]);
     expect(schema.$defs.subtitle.properties.position.enum).toEqual([...PROJECT_ENUMS.subtitlePositions]);
     expect(schema.$defs.subtitle.properties.align.enum).toEqual([...PROJECT_ENUMS.subtitleAligns]);

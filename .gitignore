@@ -30,6 +30,7 @@ yarn-error.log*
 # Next.js loads and both of which would have been committed.
 .env*
 !.env.example
+.data/
 
 # vercel
 .vercel

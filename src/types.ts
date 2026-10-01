@@ -55,6 +55,7 @@ export interface VideoClip {
   transitionDuration?: number; // トランジションの長さ（秒、デフォルト: 0.5）
   scale?: number; // 画像のスケール（1.0 = 100%, 0.5 = 50%, 2.0 = 200%）
   position?: { x: number; y: number }; // 画像の位置（%で指定、デフォルト: { x: 0, y: 0 }）
+  sceneLayout?: 'cover' | 'fit-blur';
 }
 
 export interface Subtitle {

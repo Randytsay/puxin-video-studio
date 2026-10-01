@@ -104,9 +104,10 @@ export const ProductVideo: React.FC<ProductVideoProps> = ({ clips, productName, 
           audioPlaybackRate={audioPlaybackRate}
           audioEnabled={audioEnabled}
           imageEffect={imageEffect}
-          subtitleAudioVolume={subtitleAudioVolume}
-          scale={clip.scale}
-          position={clip.position}
+           subtitleAudioVolume={subtitleAudioVolume}
+           scale={clip.scale}
+           position={clip.position}
+           sceneLayout={clip.sceneLayout}
         />
       </Sequence>
     );
@@ -342,6 +343,7 @@ interface VideoClipComponentProps {
   subtitleAudioVolume?: number; // 字幕読み上げの音量
   scale?: number; // 画像のスケール
   position?: { x: number; y: number }; // 画像の位置
+  sceneLayout?: 'cover' | 'fit-blur';
 }
 
 const VideoClipComponent: React.FC<VideoClipComponentProps> = ({ 
@@ -359,6 +361,7 @@ const VideoClipComponent: React.FC<VideoClipComponentProps> = ({
   subtitleAudioVolume = 0.8,
   scale,
   position,
+  sceneLayout,
 }) => {
   const { fps, durationInFrames } = useVideoConfig();
   
@@ -414,6 +417,7 @@ const VideoClipComponent: React.FC<VideoClipComponentProps> = ({
                 effect={imageEffect}
                 scale={scale}
                 position={position}
+                layoutMode={sceneLayout}
               />
             );
           })()}

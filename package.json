@@ -1,16 +1,16 @@
 {
-  "name": "abekyo-editor",
+  "name": "puxin-video-studio",
   "version": "0.1.0",
   "private": true,
   "license": "MIT",
   "author": "Opportunity Inc. <info@opport.jp>",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/abekyo/abekyo-editor.git"
+    "url": "git+https://github.com/Randytsay/puxin-video-studio.git"
   },
-  "homepage": "https://github.com/abekyo/abekyo-editor#readme",
+  "homepage": "https://github.com/Randytsay/puxin-video-studio#readme",
   "bugs": {
-    "url": "https://github.com/abekyo/abekyo-editor/issues"
+    "url": "https://github.com/Randytsay/puxin-video-studio/issues"
   },
   "scripts": {
     "dev": "next dev",
@@ -30,11 +30,13 @@
     "@remotion/cli": "^4.0.0",
     "@remotion/player": "^4.0.0",
     "@remotion/renderer": "^4.0.0",
+    "googleapis": "^182.0.0",
     "next": "^16.2.4",
     "next-intl": "^4.5.8",
     "react": "19.2.0",
     "react-dom": "19.2.0",
     "remotion": "^4.0.0",
+    "sharp": "^0.35.5",
     "zustand": "^5.0.8"
   },
   "devDependencies": {

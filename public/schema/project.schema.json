@@ -91,7 +91,7 @@
         "duration": {
           "type": "number",
           "exclusiveMinimum": 0,
-          "description": "Clip length in seconds. Defaults to 3 when omitted. Narration audio plays at 1.2x speed, so for a clip with narration set duration = audioDurationSeconds / 1.2. Deployments cap per-clip and total duration (defaults: 300s per clip, 1800s total).",
+          "description": "Clip length in seconds. Defaults to 3 when omitted. Puxin narration defaults to natural 1.0x playback, so a narrated clip can follow the source audio duration directly. Deployments cap per-clip and total duration (defaults: 300s per clip, 1800s total).",
           "default": 3
         },
         "index": {
@@ -113,7 +113,7 @@
         "audioStartTime": {
           "type": "number",
           "minimum": 0,
-          "description": "Seconds to skip from the start of audioUrl (trim-in point), measured in the audio file's own timebase. Narration plays at 1.2x speed, so a timeline offset of t seconds corresponds to audioStartTime = t * 1.2.",
+          "description": "Seconds to skip from the start of audioUrl (trim-in point), measured in the audio file's own timebase.",
           "default": 0
         },
         "transitionType": {
@@ -142,6 +142,12 @@
             "x": { "type": "number" },
             "y": { "type": "number" }
           }
+        },
+        "sceneLayout": {
+          "type": "string",
+          "enum": ["cover", "fit-blur"],
+          "description": "Visual composition mode. fit-blur preserves the full source over a blurred full-frame copy, useful for vertical video.",
+          "default": "cover"
         }
       }
     },

@@ -192,6 +192,7 @@ export default function HomePage() {
   return (
     <>
       <LanguageSwitcher />
+      <a href="/studio" className="fixed left-4 top-4 z-[90] rounded-full border border-amber-200/20 bg-amber-100/10 px-4 py-2 text-sm font-semibold text-amber-100 backdrop-blur-md hover:bg-amber-100/20">普新短影音製作台</a>
       <DragOverlay visible={isDragging} label={t('dropOverlayTitle')} hint={t('dropOverlayHint')} />
 
       <main className="relative min-h-screen overflow-hidden bg-gradient-to-br from-[#0a0a0a] via-[#121214] to-[#0d0d0d] text-white">

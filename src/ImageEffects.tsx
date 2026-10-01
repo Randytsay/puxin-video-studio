@@ -17,6 +17,7 @@ interface ImageEffectsProps {
   effect?: 'zoom' | 'pan' | 'kenBurns' | 'zoomOut' | 'pulse' | 'none';
   scale?: number; // 画像のスケール（1.0 = 100%, 0.5 = 50%, 2.0 = 200%）
   position?: { x: number; y: number }; // 画像の位置（%で指定）
+  layoutMode?: 'cover' | 'fit-blur';
 }
 
 // Treat a clip's primary visual asset as a video when its URL points at a
@@ -96,6 +97,7 @@ export const ImageWithEffects: React.FC<ImageEffectsProps> = ({
   effect = 'none', // デフォルトはエフェクトなし（控えめに）
   scale = 1.0, // デフォルトは100%
   position = { x: 0, y: 0 }, // デフォルトは中央
+  layoutMode = 'cover',
 }) => {
   // Hooks must run on every render in the same order — call them up-front
   // before any conditional return path. The values are only used by the
@@ -129,7 +131,7 @@ export const ImageWithEffects: React.FC<ImageEffectsProps> = ({
   const style: React.CSSProperties = {
     width: '100%',
     height: '100%',
-    objectFit: 'cover', // contain → coverに変更（画像が画面全体を覆うように）
+    objectFit: layoutMode === 'fit-blur' ? 'contain' : 'cover',
     transformOrigin: 'center center', // 変換の基準点を中央に設定
   };
 
@@ -372,6 +374,41 @@ export const ImageWithEffects: React.FC<ImageEffectsProps> = ({
     objectFit: style.objectFit,
     transformOrigin: style.transformOrigin,
   });
+
+  if (layoutMode === 'fit-blur') {
+    return (
+      <AbsoluteFill style={{ overflow: 'hidden', backgroundColor: '#171510' }}>
+        <Img
+          src={imageSrc}
+          style={{
+            position: 'absolute',
+            inset: '-6%',
+            width: '112%',
+            height: '112%',
+            objectFit: 'cover',
+            filter: 'blur(36px) brightness(0.64) saturate(0.82)',
+            transform: 'scale(1.08)',
+          }}
+        />
+        <AbsoluteFill style={{ background: 'rgba(24, 20, 14, 0.12)' }} />
+        <AbsoluteFill style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '5% 0' }}>
+          <Img
+            src={imageSrc}
+            style={{
+              ...style,
+              width: '100%',
+              height: '100%',
+              objectFit: 'contain',
+              minWidth: 0,
+              minHeight: 0,
+              maxWidth: '100%',
+              maxHeight: '100%',
+            }}
+          />
+        </AbsoluteFill>
+      </AbsoluteFill>
+    );
+  }
 
   return (
     <AbsoluteFill style={{ 
