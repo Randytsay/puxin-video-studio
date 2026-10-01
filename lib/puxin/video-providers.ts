@@ -1,10 +1,26 @@
-export type VideoGenerationProviderId = 'minimax-h3-colab' | 'veo-3.1';
+export type VideoGenerationProviderId = 'minimax-h3-colab' | 'vertex-veo-3.1';
 
 export interface VideoGenerationProviderStatus {
   id: VideoGenerationProviderId;
   label: string;
   configured: boolean;
   purpose: string;
+}
+
+export interface VoiceGenerationProviderStatus {
+  id: 'vertex-gemini-tts';
+  label: string;
+  configured: boolean;
+  purpose: string;
+  model: string;
+}
+
+function vertexConfigured(): boolean {
+  return Boolean(
+    process.env.GOOGLE_CLOUD_PROJECT?.trim() &&
+      (process.env.GOOGLE_APPLICATION_CREDENTIALS?.trim() ||
+        process.env.GOOGLE_CLOUD_ACCESS_TOKEN?.trim()),
+  );
 }
 
 export function getVideoGenerationProviderStatuses(): VideoGenerationProviderStatus[] {
@@ -16,10 +32,22 @@ export function getVideoGenerationProviderStatuses(): VideoGenerationProviderSta
       purpose: 'Reference-image animation for selected scenes',
     },
     {
-      id: 'veo-3.1',
-      label: 'Veo 3.1',
-      configured: Boolean(process.env.GEMINI_API_KEY?.trim()),
-      purpose: 'Optional cloud image-to-video provider',
+      id: 'vertex-veo-3.1',
+      label: 'Vertex AI · Veo 3.1',
+      configured: vertexConfigured(),
+      purpose: 'Google Cloud image-to-video provider for selected scenes',
+    },
+  ];
+}
+
+export function getVoiceGenerationProviderStatuses(): VoiceGenerationProviderStatus[] {
+  return [
+    {
+      id: 'vertex-gemini-tts',
+      label: 'Vertex AI · Gemini 3.1 Flash TTS',
+      configured: vertexConfigured(),
+      purpose: 'Natural Traditional-Chinese narration for Puxin scenes',
+      model: process.env.VERTEX_TTS_MODEL?.trim() || 'gemini-3.1-flash-tts-preview',
     },
   ];
 }

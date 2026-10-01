@@ -12,12 +12,15 @@
 8. Puxin imports set `showSceneSubtitle=false` by default because the illustrated source already carries its own visible text; narration can still be synthesized from `clip.text`.
 9. Abekyo/Remotion remains the timeline, BGM, subtitle, preview and MP4 render engine.
 
-## AI video providers
+## AI providers
 
-AI scene generation is provider-based. `MiniMax H3 / Colab` and `Veo 3.1` stay outside the core timeline.
+Google-hosted AI uses Vertex AI. AI scene generation remains provider-based, with MiniMax H3 / Colab as an optional external worker and Vertex AI as the production cloud path.
 
 - MiniMax H3 is an external worker configured through `MINIMAX_H3_RUNNER_PATH`; the referenced Colab skill source is not copied into this MIT fork.
+- Vertex AI Veo 3.1 generates selected animated scenes.
+- Vertex AI Gemini 3.1 Flash TTS generates narration. The default model can be overridden by `VERTEX_TTS_MODEL`.
 - Generated MP4 clips can later replace the visual asset of a selected scene while narration, subtitles and BGM remain controlled here.
+- Google Drive authentication is separate from Vertex AI authentication: Drive OAuth accesses the user's My Drive folder, while Vertex AI uses Google Cloud credentials/ADC.
 
 ## Environment
 
@@ -27,5 +30,8 @@ GOOGLE_DRIVE_CLIENT_SECRET=
 GOOGLE_DRIVE_REFRESH_TOKEN=
 PUXIN_DRIVE_ROOT_FOLDER_ID=11KCNFFXmZQG6CSITUNM_WfXA-nyOr0ah
 MINIMAX_H3_RUNNER_PATH=
-GEMINI_API_KEY=
+GOOGLE_CLOUD_PROJECT=
+GOOGLE_CLOUD_LOCATION=global
+GOOGLE_APPLICATION_CREDENTIALS=
+VERTEX_TTS_MODEL=gemini-3.1-flash-tts-preview
 ```
