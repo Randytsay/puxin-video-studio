@@ -202,6 +202,9 @@ export function validateProject(input: unknown): ValidationResult {
       if (clip.sceneLayout !== undefined && !SCENE_LAYOUTS.includes(clip.sceneLayout as string)) {
         err(at('sceneLayout'), `sceneLayout must be one of: ${SCENE_LAYOUTS.join(', ')}`);
       }
+      if (clip.showSceneSubtitle !== undefined && typeof clip.showSceneSubtitle !== 'boolean') {
+        err(at('showSceneSubtitle'), 'showSceneSubtitle must be a boolean');
+      }
       if (clip.transitionType !== undefined && !TRANSITIONS.includes(clip.transitionType as string)) {
         err(at('transitionType'), `transitionType must be one of: ${TRANSITIONS.join(', ')}`);
       }

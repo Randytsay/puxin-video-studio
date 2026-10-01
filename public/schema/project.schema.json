@@ -148,6 +148,11 @@
           "enum": ["cover", "fit-blur"],
           "description": "Visual composition mode. fit-blur preserves the full source over a blurred full-frame copy, useful for vertical video.",
           "default": "cover"
+        },
+        "showSceneSubtitle": {
+          "type": "boolean",
+          "description": "Whether clip.text is rendered as an extra subtitle. Set false when the source artwork already contains text.",
+          "default": true
         }
       }
     },

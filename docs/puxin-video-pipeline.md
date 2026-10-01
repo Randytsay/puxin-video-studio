@@ -8,7 +8,9 @@
 4. Auto split scans the middle of the image for a high-uniformity separator row. Manual single/double override is the next UI refinement.
 5. Resulting panels are stored under `public/uploads/image/puxin/` and converted into Abekyo `VideoClip`s.
 6. Projects are created as 1080p 9:16 with `fit-blur` composition and restrained motion.
-7. Abekyo/Remotion remains the timeline, BGM, subtitle, preview and MP4 render engine.
+7. Known story folders can supply a narration preset. The first preset is `水壺`: 15 scenes, natural 1.0x voice timing, about one minute.
+8. Puxin imports set `showSceneSubtitle=false` by default because the illustrated source already carries its own visible text; narration can still be synthesized from `clip.text`.
+9. Abekyo/Remotion remains the timeline, BGM, subtitle, preview and MP4 render engine.
 
 ## AI video providers
 

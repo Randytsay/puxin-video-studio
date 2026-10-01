@@ -56,6 +56,7 @@ export interface VideoClip {
   scale?: number; // 画像のスケール（1.0 = 100%, 0.5 = 50%, 2.0 = 200%）
   position?: { x: number; y: number }; // 画像の位置（%で指定、デフォルト: { x: 0, y: 0 }）
   sceneLayout?: 'cover' | 'fit-blur';
+  showSceneSubtitle?: boolean; // 原画像に文字がある場合は false にして重複字幕を避ける
 }
 
 export interface Subtitle {

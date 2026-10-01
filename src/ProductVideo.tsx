@@ -545,7 +545,7 @@ const VideoClipComponent: React.FC<VideoClipComponentProps> = ({
 
           {/* Subtitles - シーンの全期間表示（clip.textが設定されている場合、かつaudioEnabledがtrueの場合のみ） */}
           {/* 編集前の動画（audioEnabled=false）では字幕を表示しない */}
-          {audioEnabled && clip.text && clip.text.trim() && <Subtitle text={clip.text} />}
+          {audioEnabled && clip.showSceneSubtitle !== false && clip.text && clip.text.trim() && <Subtitle text={clip.text} />}
         </LayoutTemplate>
       </ClipTransition>
     </AbsoluteFill>
