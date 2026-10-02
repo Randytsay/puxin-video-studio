@@ -51,4 +51,8 @@ Drive 寫入授權已由 `randy.tsay@gmail.com` 完成。VPS 驗證指定「IG�
 
 固定網域完成後又執行一次完整 V1 驗收：`水壺` 8 張素材拆成 15 Scene，15/15 Gemini TTS、2 個 Veo Scene、BGM、1080×1920 Remotion Render、Drive 回存全部成功。成品 101.42 秒、H.264 + AAC，成果資料夾：[驗收｜水壺故事 V1 完整流程 20261002](https://drive.google.com/drive/folders/1dY6OS0PR0XQt1xYYosfdGcEq_S5vlfZ-)。第一次批次 TTS 在第 12 段遇到 Vertex `429 Resource exhausted`，加入退避重試後完成，證實下一步應把 retry/backoff 正式做進批次 TTS。完整一致性與缺口盤點見 `docs/v1-alignment-review-2026-10-02.md`。
 
+後續修正版統一將所有非滿版靜態場景改成模糊延伸背景，不再出現純白上下留邊；加入原創程序生成 BGM「茶煙・心靜」，並重新輸出 revision 2。正式成品為 1080×1920、H.264 30fps、AAC 48kHz stereo、101.42 秒、112,178,351 bytes；整體音訊約 -22.2 LUFS、True Peak -5.2 dBFS。R2 公開播放連結：`https://pub-81becb6c33d744ad9c8bff0f27c0d785.r2.dev/puxin-video-studio/releases/water-kettle-meditation-20261002.mp4`，HTTP 200、`video/mp4`、Range 請求 206 已驗證。
+
+MiniMax H3 已以外部 runner 方式整合進 V1 API 與場景 UI；外部 skill 原始碼維持在 Git 之外。Google Colab CLI + ADC 連線測試成功，但目前連線帳號回報 compute-unit balance `0.0`，因此這次成片未消耗 H3 額度，仍使用既有兩段 Veo 動態場景。
+
 OAuth 目前為 External／Testing；長期使用前仍需完成適用的 OAuth 發布／驗證流程。正式固定網域與 Console 回呼已改為 `video-studio.puxin.ccwu.cc`，不再依賴 Quick Tunnel。V1 基礎版本已提交並推送至 `feat/puxin-studio-v01`；後續修改同樣必須在上線前完成測試、commit 與 push。完整營運資料見 `docs/production-runbook.md`。

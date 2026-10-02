@@ -25,9 +25,9 @@ The implementation later added project persistence, durable render jobs, Drive r
 | Comic split | Mostly complete | V1 exposes explicit single/double split with adjustable divider. The auto detector still exists in the engine/API but is intentionally not exposed in the V1 creation UI. |
 | 9:16 scene builder | Complete | 9:16 and 3:4 are supported; original-image preserving `contain` / `fit-blur` plus `cover` are available. |
 | Preserve original image/text | Complete for static scenes | Static source is preserved without recreating text. Veo is prompted to preserve it, but generative video cannot guarantee pixel-perfect typography. |
-| Gemini TTS | Functionally complete | Real Vertex generation, six voices, style prompt, cache, per-scene audition and bulk generation are implemented. Reliability gap remains for quota/rate-limit retry. |
+| Gemini TTS | Functionally complete | Real Vertex generation, six voices, style prompt, cache, per-scene audition and bulk generation are implemented. Transient `429/5xx` responses now retry with bounded backoff. |
 | Veo AI motion | Functionally complete | V1 has explicit per-scene confirmation, Veo 3.1 Fast generation and persistent MP4 replacement. Long-running Veo state is still client-polled rather than persisted server-side. |
-| MiniMax H3 provider | Placeholder only | Provider registry/config flag exists; no production worker/UI execution path is implemented. |
+| MiniMax H3 provider | Integrated external provider | V1 can submit/poll H3 jobs through an external Colab runner without copying the unlicensed skill source into this MIT repository. Runtime/ADC connectivity is verified; the currently connected Colab account reports 0 compute-unit balance, so paid H3 inference has not been run. |
 | BGM | Complete | Upload, volume control and Remotion mixing work. No curated Puxin BGM library yet. |
 | Subtitles | Partial | Scene-level narration subtitle on/off exists. Word-level timing/SRT and V1 typography/timing editor are not implemented. |
 | Scene timing/motion | Complete | Duration, static motions, transitions and video-scene handling work. |
@@ -75,15 +75,15 @@ Drive output was independently checked after upload. The result folder contains 
 
 ### Validation finding: TTS rate limiting
 
-The first bulk run reached Vertex quota/rate limiting at scene 12 (`429 Resource exhausted`). Retrying with backoff completed successfully; previously generated narration was reused from cache. This is an important production finding: the current V1 browser bulk-generation loop should implement server-side retry/backoff instead of surfacing a temporary 429 as a failed batch.
+The first bulk run reached Vertex quota/rate limiting at scene 12 (`429 Resource exhausted`). Retrying with backoff completed successfully; previously generated narration was reused from cache. The TTS provider now retries transient `429/500/502/503/504` responses with bounded backoff, and a regression test covers the throttling-recovery path.
 
 ## Remaining work
 
 ### P0 — recommended before calling the product V1.0 final
 
-1. **TTS retry/backoff and durable bulk queue.** Handle `429` and transient Vertex failures automatically; resume from cache without asking the operator to restart the batch.
+1. **Durable AI-generation queue.** TTS transient retry is complete, but bulk TTS and Veo/H3 orchestration should ultimately be persisted as resumable server-side jobs rather than relying on one browser workflow.
 2. **Persist Veo long-running jobs.** A browser close/reload currently loses the client-side polling context. Store operation name/status in SQLite and let a server worker resume polling and attach the result.
-3. **Off-site backup.** Current backups live on the same VPS. Replicate backups to R2, Drive, or another host.
+3. **Off-site backup.** Current database/media backups live on the same VPS. R2 is now used for shareable release media, but the full application backup still needs off-site replication.
 4. **OAuth production status.** The owner OAuth app is still External/Testing. Complete the appropriate Google OAuth publishing/verification path for long-term refresh-token stability.
 
 ### P1 — product-quality improvements
@@ -98,7 +98,7 @@ The first bulk run reached Vertex quota/rate limiting at scene 12 (`429 Resource
 
 ### P2 — optional/future scope
 
-12. **MiniMax H3 execution path.** The provider is registered only. Implement an external runner only if H3 remains strategically useful; do not copy unlicensed skill source into this MIT fork.
+12. **MiniMax H3 capacity.** The external runner/API/UI path is implemented; actual H3 inference awaits a Colab account with available compute units. Keep the external source outside this MIT fork unless licensing is clarified.
 13. **Direct social publishing.** Instagram/LINE publishing is not part of the current V1 and was not required for the original core pipeline; add only if Puxin wants a publishing console.
 14. **Multi-user roles/audit.** Basic Auth is sufficient for private operation but does not provide named users, roles, or edit history.
 15. **Cloud-native render scaling.** Current single-worker VPS rendering is appropriate for the expected workload; scale only if queue demand grows.

@@ -43,6 +43,16 @@ The app is protected by HTTP Basic Auth. Credentials and the precomputed `PUXIN_
 
 Do not delete `.data/studio` during deploys or cache cleanup.
 
+## Cloudflare R2 release media
+
+- Bucket: `puxin-enrollment-media`
+- Public R2 endpoint: `https://pub-81becb6c33d744ad9c8bff0f27c0d785.r2.dev`
+- Release objects use `video/mp4` with byte-range support so a shared URL can play directly in a browser.
+- The original ambient BGM `茶煙・心靜` is stored under `puxin-video-studio/audio/chayan-xinjing-20261002.mp3`; it was procedurally synthesized for this project and normalized to about `-24.9 LUFS`.
+- Current water-kettle release: `https://pub-81becb6c33d744ad9c8bff0f27c0d785.r2.dev/puxin-video-studio/releases/water-kettle-meditation-20261002.mp4`
+
+R2 is currently a publication target, not the full off-site application backup. Do not treat a published MP4 as a replacement for SQLite/media backups.
+
 ## Google Cloud / Vertex AI
 
 - Google Cloud project: `video-studio-510316`
