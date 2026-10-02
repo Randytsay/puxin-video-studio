@@ -1,3 +1,5 @@
+import { isGoogleImpersonationConfigured } from '@/lib/puxin/google-auth';
+
 export type VideoGenerationProviderId = 'minimax-h3-colab' | 'vertex-veo-3.1';
 
 export interface VideoGenerationProviderStatus {
@@ -18,7 +20,8 @@ export interface VoiceGenerationProviderStatus {
 function vertexConfigured(): boolean {
   return Boolean(
     process.env.GOOGLE_CLOUD_PROJECT?.trim() &&
-      (process.env.GOOGLE_APPLICATION_CREDENTIALS?.trim() ||
+      (isGoogleImpersonationConfigured() ||
+        process.env.GOOGLE_APPLICATION_CREDENTIALS?.trim() ||
         process.env.GOOGLE_CLOUD_ACCESS_TOKEN?.trim()),
   );
 }
@@ -35,7 +38,7 @@ export function getVideoGenerationProviderStatuses(): VideoGenerationProviderSta
       id: 'vertex-veo-3.1',
       label: 'Vertex AI · Veo 3.1',
       configured: vertexConfigured(),
-      purpose: 'Google Cloud image-to-video provider for selected scenes',
+      purpose: `Google Cloud image-to-video provider for selected scenes (${process.env.VERTEX_VIDEO_MODEL?.trim() || 'veo-3.1-fast-generate-001'})`,
     },
   ];
 }

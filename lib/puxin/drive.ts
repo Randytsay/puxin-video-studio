@@ -1,6 +1,12 @@
 import { chmod, mkdir, readFile, writeFile } from 'fs/promises';
 import path from 'path';
 import { google, type drive_v3 } from 'googleapis';
+import type { OAuth2Client } from 'google-auth-library';
+import {
+  createGoogleAuthClient,
+  GOOGLE_IMPERSONATE_SERVICE_ACCOUNT,
+  isGoogleImpersonationConfigured,
+} from '@/lib/puxin/google-auth';
 
 export const PUXIN_DRIVE_ROOT_FOLDER_ID =
   process.env.PUXIN_DRIVE_ROOT_FOLDER_ID?.trim() || '11KCNFFXmZQG6CSITUNM_WfXA-nyOr0ah';
@@ -59,6 +65,12 @@ export function createOauthClient(origin: string) {
 }
 
 export async function createAuthorizedDrive(origin: string): Promise<drive_v3.Drive> {
+  if (isGoogleImpersonationConfigured()) {
+    const auth = await createGoogleAuthClient(DRIVE_SCOPES);
+    // googleapis' generated Drive type still narrows `auth` to OAuth2Client
+    // even though the runtime accepts any google-auth-library AuthClient.
+    return google.drive({ version: 'v3', auth: auth as unknown as OAuth2Client });
+  }
   const auth = createOauthClient(origin);
   const refreshToken = await getStoredRefreshToken();
   if (!refreshToken) throw new Error('Google Drive is not connected');
@@ -87,12 +99,42 @@ export async function exchangeDriveCode(origin: string, code: string): Promise<v
   await saveRefreshToken(tokens.refresh_token);
 }
 
-export async function driveStatus(): Promise<{ configured: boolean; connected: boolean; rootFolderId: string }> {
+export async function driveStatus(): Promise<{
+  configured: boolean;
+  connected: boolean;
+  rootFolderId: string;
+  mode: 'service-account' | 'oauth' | 'unconfigured';
+  accessible?: boolean;
+  serviceAccount?: string;
+  error?: string;
+}> {
+  if (isGoogleImpersonationConfigured()) {
+    let accessible = false;
+    let error: string | undefined;
+    try {
+      const auth = await createGoogleAuthClient(DRIVE_SCOPES);
+      const drive = google.drive({ version: 'v3', auth: auth as unknown as OAuth2Client });
+      await drive.files.get({ fileId: PUXIN_DRIVE_ROOT_FOLDER_ID, fields: 'id', supportsAllDrives: true });
+      accessible = true;
+    } catch (cause) {
+      error = cause instanceof Error ? cause.message : String(cause);
+    }
+    return {
+      configured: true,
+      connected: true,
+      rootFolderId: PUXIN_DRIVE_ROOT_FOLDER_ID,
+      mode: 'service-account',
+      accessible,
+      serviceAccount: GOOGLE_IMPERSONATE_SERVICE_ACCOUNT,
+      ...(error ? { error } : {}),
+    };
+  }
   const { configured } = oauthConfig();
   return {
     configured,
     connected: configured && Boolean(await getStoredRefreshToken()),
     rootFolderId: PUXIN_DRIVE_ROOT_FOLDER_ID,
+    mode: configured ? 'oauth' : 'unconfigured',
   };
 }
 
@@ -131,7 +173,14 @@ export async function assertInsidePuxinRoot(drive: drive_v3.Drive, itemId: strin
   if (!isDriveId(itemId)) throw new Error('Invalid Drive item id');
   let current = itemId;
   for (let depth = 0; depth < 24; depth += 1) {
-    if (current === PUXIN_DRIVE_ROOT_FOLDER_ID) return;
+    if (current === PUXIN_DRIVE_ROOT_FOLDER_ID) {
+      try {
+        await drive.files.get({ fileId: current, fields: 'id', supportsAllDrives: true });
+      } catch {
+        throw new Error('The configured Puxin Drive root folder is not shared with the service account');
+      }
+      return;
+    }
     const response = await drive.files.get({
       fileId: current,
       fields: 'id,parents',

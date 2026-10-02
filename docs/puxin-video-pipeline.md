@@ -20,7 +20,8 @@ Google-hosted AI uses Vertex AI. AI scene generation remains provider-based, wit
 - Vertex AI Veo 3.1 generates selected animated scenes.
 - Vertex AI Gemini 3.1 Flash TTS generates narration. The default model can be overridden by `VERTEX_TTS_MODEL`.
 - Generated MP4 clips can later replace the visual asset of a selected scene while narration, subtitles and BGM remain controlled here.
-- Google Drive authentication is separate from Vertex AI authentication: Drive OAuth accesses the user's My Drive folder, while Vertex AI uses Google Cloud credentials/ADC.
+- Google-hosted production access uses keyless service-account impersonation when `GOOGLE_IMPERSONATE_SERVICE_ACCOUNT` is set. The VPS' existing ADC is only the source identity; Google issues short-lived credentials for the Puxin service account.
+- Google Drive can use the same impersonated service account with the `drive.readonly` scope. The target My Drive folder must be shared with that service-account email. OAuth remains as a fallback for deployments that do not use service-account impersonation.
 
 ## Environment
 
@@ -31,7 +32,10 @@ GOOGLE_DRIVE_REFRESH_TOKEN=
 PUXIN_DRIVE_ROOT_FOLDER_ID=11KCNFFXmZQG6CSITUNM_WfXA-nyOr0ah
 MINIMAX_H3_RUNNER_PATH=
 GOOGLE_CLOUD_PROJECT=
-GOOGLE_CLOUD_LOCATION=global
+GOOGLE_IMPERSONATE_SERVICE_ACCOUNT=
 GOOGLE_APPLICATION_CREDENTIALS=
+VERTEX_VIDEO_LOCATION=us-central1
+VERTEX_VIDEO_MODEL=veo-3.1-fast-generate-001
+VERTEX_TTS_LOCATION=global
 VERTEX_TTS_MODEL=gemini-3.1-flash-tts-preview
 ```

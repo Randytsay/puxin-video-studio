@@ -13,7 +13,9 @@ export async function GET() {
     voiceProviders: getVoiceGenerationProviderStatuses(),
     vertex: {
       project: process.env.GOOGLE_CLOUD_PROJECT?.trim() || null,
-      location: process.env.GOOGLE_CLOUD_LOCATION?.trim() || 'global',
+      serviceAccount: process.env.GOOGLE_IMPERSONATE_SERVICE_ACCOUNT?.trim() || null,
+      videoLocation: process.env.VERTEX_VIDEO_LOCATION?.trim() || 'us-central1',
+      ttsLocation: process.env.VERTEX_TTS_LOCATION?.trim() || 'global',
     },
   });
 }
