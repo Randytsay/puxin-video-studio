@@ -18,6 +18,8 @@ Google-hosted AI uses Vertex AI. AI scene generation remains provider-based, wit
 
 - MiniMax H3 is an external worker configured through `MINIMAX_H3_RUNNER_PATH`; the referenced Colab skill source is not copied into this MIT fork.
 - Vertex AI Veo 3.1 generates selected animated scenes.
+- Imported Puxin still-image scenes expose an AI 動態化 control in the editor. After an explicit confirmation, the app submits one Veo 3.1 Fast job, polls the long-running operation, stores the MP4 under public/uploads/video/puxin/, and replaces only that scene's visual asset. The generated video is muted in Remotion so the existing narration/BGM remain authoritative.
+- The editor rounds each scene up to the nearest supported Veo duration (4/6/8 seconds) but keeps the original timeline duration, so longer generated footage is trimmed rather than changing story pacing.
 - Vertex AI Gemini 3.1 Flash TTS generates narration. The default model can be overridden by `VERTEX_TTS_MODEL`.
 - Generated MP4 clips can later replace the visual asset of a selected scene while narration, subtitles and BGM remain controlled here.
 - Google-hosted production access uses keyless service-account impersonation when `GOOGLE_IMPERSONATE_SERVICE_ACCOUNT` is set. The VPS' existing ADC is only the source identity; Google issues short-lived credentials for the Puxin service account.

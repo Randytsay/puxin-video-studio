@@ -5,6 +5,7 @@
 // all state is owned by the parent VideoEditor and threaded through onUpdate.
 
 import { useTranslations } from 'next-intl';
+import { useState } from 'react';
 import type { VideoClip, TransitionType } from '@/src/types';
 import { MediaUploadButton } from './MediaUploadButton';
 
@@ -15,6 +16,59 @@ export interface ClipPropertiesProps {
 
 export function ClipProperties({ clip, onUpdate }: ClipPropertiesProps) {
   const t = useTranslations('editor');
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiMessage, setAiMessage] = useState<string | null>(null);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [aiPrompt, setAiPrompt] = useState('');
+  const [aiConfirmOpen, setAiConfirmOpen] = useState(false);
+  const mediaPath = clip.imageUrl?.split('?')[0].toLowerCase() || '';
+  const isVideo = ['.mp4', '.mov', '.m4v', '.webm', '.ogv'].some((suffix) => mediaPath.endsWith(suffix));
+  const isPuxinImage = Boolean(clip.imageUrl?.startsWith('/uploads/image/puxin/')) && !isVideo;
+  const veoDuration = !Number.isFinite(clip.duration) || clip.duration <= 4 ? 4 : clip.duration <= 6 ? 6 : 8;
+
+  async function animateScene() {
+    if (!clip.imageUrl || !isPuxinImage || aiBusy) return;
+    setAiBusy(true);
+    setAiError(null);
+    setAiMessage('正在建立 AI 動態化工作…');
+    try {
+      const submit = await fetch('/api/puxin/veo', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          imageUrl: clip.imageUrl,
+          clipDuration: clip.duration,
+          durationSeconds: veoDuration,
+          storyContext: clip.text,
+          prompt: aiPrompt.trim() || undefined,
+        }),
+      });
+      const submitted = (await submit.json()) as { operationName?: string; error?: string };
+      if (!submit.ok || !submitted.operationName) {
+        throw new Error(submitted.error || 'AI 動態化工作建立失敗');
+      }
+      setAiMessage(`Veo 正在生成 ${veoDuration} 秒直式影片…`);
+      for (let attempt = 0; attempt < 120; attempt += 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 5000));
+        const status = await fetch(`/api/puxin/veo?operationName=${encodeURIComponent(submitted.operationName)}`);
+        const result = (await status.json()) as { done?: boolean; videoUrl?: string; error?: string };
+        if (!status.ok) throw new Error(result.error || 'AI 動態化狀態查詢失敗');
+        if (!result.done) continue;
+        if (result.error) throw new Error(result.error);
+        if (!result.videoUrl) throw new Error('AI 動態化已完成，但沒有取得影片');
+        onUpdate({ imageUrl: result.videoUrl, imageEffect: 'none', sceneLayout: 'cover' });
+        setAiMessage('AI 動態化完成，已自動替換這個 Scene。');
+        return;
+      }
+      throw new Error('AI 動態化超過 10 分鐘，請稍後再試');
+    } catch (error) {
+      setAiError(error instanceof Error ? error.message : String(error));
+      setAiMessage(null);
+    } finally {
+      setAiBusy(false);
+    }
+  }
+
   return (
     <div className="space-y-6">
       {/* 画像アップロード */}
@@ -22,11 +76,22 @@ export function ClipProperties({ clip, onUpdate }: ClipPropertiesProps) {
         <label className="block text-sm font-semibold text-gray-300 mb-2">{t('clipProperties.imageLabel')}</label>
         {clip.imageUrl ? (
           <div className="relative">
-            <img
-              src={clip.imageUrl}
-              alt={clip.plotName}
-              className="w-full h-32 object-cover rounded-xl border border-[rgba(255,255,255,0.2)]"
-            />
+            {isVideo ? (
+              <video
+                src={clip.imageUrl}
+                muted
+                loop
+                autoPlay
+                playsInline
+                className="w-full h-32 object-cover rounded-xl border border-[rgba(255,255,255,0.2)]"
+              />
+            ) : (
+              <img
+                src={clip.imageUrl}
+                alt={clip.plotName}
+                className="w-full h-32 object-cover rounded-xl border border-[rgba(255,255,255,0.2)]"
+              />
+            )}
             <button
               onClick={() => onUpdate({ imageUrl: null })}
               className="absolute top-2 right-2 p-2 bg-red-500/80 hover:bg-red-500 rounded-lg text-white text-xs"
@@ -38,6 +103,54 @@ export function ClipProperties({ clip, onUpdate }: ClipPropertiesProps) {
           <MediaUploadButton onUpload={(url) => onUpdate({ imageUrl: url })} />
         )}
       </div>
+
+      {isPuxinImage && (
+        <button
+          type="button"
+          onClick={() => setAiConfirmOpen(true)}
+          className="w-full rounded-xl bg-indigo-500 px-4 py-3 text-sm font-semibold text-white"
+        >
+          AI 動態化
+        </button>
+      )}
+
+      {isPuxinImage && aiConfirmOpen && (
+        <div className="rounded-xl border border-indigo-400/20 bg-indigo-500/10 p-4">
+          <div className="text-sm font-semibold text-indigo-100">確認使用 Veo 3.1 Fast</div>
+          <div className="mt-1 text-xs leading-5 text-indigo-200/70">
+            將建立 9:16、720p、{veoDuration} 秒的 AI 動態影片。原本的旁白與 Scene 時長會保留。
+          </div>
+          <textarea
+            value={aiPrompt}
+            onChange={(event) => setAiPrompt(event.target.value)}
+            rows={3}
+            maxLength={800}
+            disabled={aiBusy}
+            placeholder="可選：補充想要的動作；留空會使用禪意慢推鏡、微風與柔光。"
+            className="mt-3 w-full resize-none rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs text-white placeholder:text-gray-500 focus:border-indigo-400 focus:outline-none disabled:opacity-50"
+          />
+          <div className="mt-3 flex gap-2">
+            <button
+              type="button"
+              disabled={aiBusy}
+              onClick={animateScene}
+              className="rounded-lg bg-indigo-500 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"
+            >
+              {aiBusy ? '生成中…' : '確認生成'}
+            </button>
+            <button
+              type="button"
+              disabled={aiBusy}
+              onClick={() => setAiConfirmOpen(false)}
+              className="rounded-lg border border-white/10 px-3 py-2 text-xs text-gray-300 disabled:opacity-50"
+            >
+              取消
+            </button>
+          </div>
+        </div>
+      )}
+      {aiMessage && <div className="text-xs text-emerald-300">{aiMessage}</div>}
+      {aiError && <div className="text-xs leading-5 text-red-300">{aiError}</div>}
 
       <div>
         <label className="block text-sm font-semibold text-gray-300 mb-2">{t('clipProperties.durationLabel')}</label>
