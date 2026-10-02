@@ -65,7 +65,18 @@ function isCrossSiteMutation(request: NextRequest): boolean {
   return site === 'cross-site' || site === 'same-site';
 }
 
+function requiresBasicAuth(request: NextRequest): boolean {
+  const expected = process.env.PUXIN_BASIC_AUTH_HEADER?.trim();
+  if (!expected) return false;
+  return request.headers.get('authorization') !== expected;
+}
+
 export function proxy(request: NextRequest) {
+  if (requiresBasicAuth(request)) {
+    const response = NextResponse.json({ error: 'Authentication required' }, { status: 401 });
+    response.headers.set('WWW-Authenticate', 'Basic realm="Puxin Video Studio", charset="UTF-8"');
+    return applySecurityHeaders(response);
+  }
   if (isCrossSiteMutation(request)) {
     return applySecurityHeaders(
       NextResponse.json({ error: 'Cross-site requests are not allowed' }, { status: 403 }),
