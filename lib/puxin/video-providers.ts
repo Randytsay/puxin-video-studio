@@ -32,7 +32,7 @@ export function getVideoGenerationProviderStatuses(): VideoGenerationProviderSta
       id: 'minimax-h3-colab',
       label: 'MiniMax H3 / Google Colab',
       configured: Boolean(process.env.MINIMAX_H3_RUNNER_PATH?.trim()),
-      purpose: 'Reference-image animation for selected scenes',
+      purpose: 'Reference-image animation through an external Google Colab runner (source remains outside this MIT repository)',
     },
     {
       id: 'vertex-veo-3.1',

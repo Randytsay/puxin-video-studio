@@ -5,6 +5,20 @@ import { getImpersonatedAccessToken } from './google-auth';
 import { mediaPath, mediaUrl } from './paths';
 
 export const TTS_VOICES = ['Kore', 'Leda', 'Aoede', 'Charon', 'Puck', 'Sulafat'] as const;
+const RETRYABLE_TTS_STATUS = new Set([429, 500, 502, 503, 504]);
+
+function retryDelayMs(response: Response, attempt: number): number {
+  const retryAfter = response.headers.get('retry-after');
+  if (retryAfter) {
+    const seconds = Number(retryAfter);
+    if (Number.isFinite(seconds) && seconds > 0) return Math.min(60_000, seconds * 1000);
+  }
+  return [10_000, 20_000, 40_000, 60_000][attempt] ?? 60_000;
+}
+
+async function wait(ms: number) {
+  await new Promise(resolve => setTimeout(resolve, ms));
+}
 export function pcmToWav(pcm: Buffer): Buffer {
   if (!pcm.length || pcm.length % 2) throw new Error('語音服務回傳的音訊格式不正確');
   const header = Buffer.alloc(44);
@@ -32,13 +46,22 @@ export async function synthesizeNarration(input: { text: string; voice?: string;
   try { const cached = await readFile(output); return { audioUrl: mediaUrl(key), duration: (cached.length - 44) / 48000, cached: true, model }; } catch { /* first generation */ }
   const token = process.env.GOOGLE_CLOUD_ACCESS_TOKEN?.trim() || await getImpersonatedAccessToken();
   const hostname = location === 'global' ? 'aiplatform.googleapis.com' : `${location}-aiplatform.googleapis.com`;
-  const response = await fetch(`https://${hostname}/v1beta1/projects/${project}/locations/${location}/publishers/google/models/${model}:generateContent`, {
-    method: 'POST', signal: AbortSignal.timeout(120000),
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'x-goog-user-project': project },
-    body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: contents }] }], generationConfig: { responseModalities: ['AUDIO'], speechConfig: { languageCode: 'cmn-tw', voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } } } }),
-  });
-  const data = await response.json() as { error?: { message?: string }; candidates?: { content?: { parts?: { inlineData?: { data?: string; mimeType?: string } }[] } }[] };
-  if (!response.ok) throw new Error(`旁白生成失敗（${response.status}）：${data.error?.message || '請檢查模型與權限'}`);
+  const endpoint = `https://${hostname}/v1beta1/projects/${project}/locations/${location}/publishers/google/models/${model}:generateContent`;
+  let response!: Response;
+  let data!: { error?: { message?: string }; candidates?: { content?: { parts?: { inlineData?: { data?: string; mimeType?: string } }[] } }[] };
+  for (let attempt = 0; attempt < 5; attempt++) {
+    response = await fetch(endpoint, {
+      method: 'POST', signal: AbortSignal.timeout(120000),
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'x-goog-user-project': project },
+      body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: contents }] }], generationConfig: { responseModalities: ['AUDIO'], speechConfig: { languageCode: 'cmn-tw', voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } } } }),
+    });
+    data = await response.json() as typeof data;
+    if (response.ok) break;
+    if (!RETRYABLE_TTS_STATUS.has(response.status) || attempt === 4) {
+      throw new Error(`旁白生成失敗（${response.status}）：${data.error?.message || '請檢查模型與權限'}`);
+    }
+    await wait(retryDelayMs(response, attempt));
+  }
   const parts = data.candidates?.[0]?.content?.parts || [];
   const audioParts = parts.filter(p => p.inlineData?.data);
   if (audioParts.some(p => !/^audio\/(L16|pcm)(;|$)/i.test(p.inlineData?.mimeType || ''))) throw new Error('語音服務回傳了不支援的音訊格式');

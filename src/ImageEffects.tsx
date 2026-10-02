@@ -378,7 +378,28 @@ export const ImageWithEffects: React.FC<ImageEffectsProps> = ({
     transformOrigin: style.transformOrigin,
   });
 
-  if (layoutMode === 'contain') return <AbsoluteFill style={{ backgroundColor: '#f0eee8' }}><Img src={imageSrc} style={{ ...style, width: '100%', height: '100%', objectFit: 'contain' }} /></AbsoluteFill>;
+  if (layoutMode === 'contain') {
+    return (
+      <AbsoluteFill style={{ overflow: 'hidden', backgroundColor: '#171510' }}>
+        <Img
+          src={imageSrc}
+          style={{
+            position: 'absolute',
+            inset: '-7%',
+            width: '114%',
+            height: '114%',
+            objectFit: 'cover',
+            filter: 'blur(30px) brightness(0.72) saturate(0.88)',
+            transform: 'scale(1.1)',
+          }}
+        />
+        <AbsoluteFill style={{ background: 'rgba(24, 20, 14, 0.08)' }} />
+        <AbsoluteFill style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <Img src={imageSrc} style={{ ...style, width: '100%', height: '100%', objectFit: 'contain' }} />
+        </AbsoluteFill>
+      </AbsoluteFill>
+    );
+  }
 
   if (layoutMode === 'fit-blur') {
     return (

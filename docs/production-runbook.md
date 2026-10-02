@@ -53,6 +53,8 @@ Do not delete `.data/studio` during deploys or cache cleanup.
 - TTS region: `global`
 - Authentication: keyless service-account impersonation from VPS ADC; no service-account JSON key is required
 
+MiniMax H3 is intentionally kept outside this MIT repository. The runtime image includes Python 3.12 and \`google-colab-cli\`; the external H3 skill checkout is mounted read-only and referenced by \`MINIMAX_H3_RUNNER_PATH\`. Do not vendor the external skill into this repository unless its licensing is explicitly clarified.
+
 ## Google Drive
 
 - Source/root folder name: `IG輪播素材`

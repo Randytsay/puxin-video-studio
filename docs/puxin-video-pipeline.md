@@ -16,7 +16,7 @@
 
 Google-hosted AI uses Vertex AI. AI scene generation remains provider-based, with MiniMax H3 / Colab as an optional external worker and Vertex AI as the production cloud path.
 
-- MiniMax H3 is an external worker configured through `MINIMAX_H3_RUNNER_PATH`; the referenced Colab skill source is not copied into this MIT fork.
+- MiniMax H3 is an external worker configured through `MINIMAX_H3_RUNNER_PATH`; the referenced Colab skill source is not copied into this MIT fork. V1 exposes an asynchronous H3 endpoint that invokes the external runner and stores finished MP4s in the persistent media store. Recommended deployment uses `COLAB_AUTH=adc` with the VPS ADC, an A100 runtime, and 4–15 second scene duration.
 - Vertex AI Veo 3.1 generates selected animated scenes.
 - Imported Puxin still-image scenes expose an AI 動態化 control in the V1 editor. After an explicit confirmation, the app submits one Veo 3.1 Fast job, polls the long-running operation, stores the MP4 under the persistent `.data/studio/media/video/` store, and replaces only that scene's visual asset. The generated video is muted in Remotion so the existing narration/BGM remain authoritative.
 - The editor rounds each scene up to the nearest supported Veo duration (4/6/8 seconds) but keeps the original timeline duration, so longer generated footage is trimmed rather than changing story pacing.
@@ -33,6 +33,10 @@ GOOGLE_DRIVE_CLIENT_SECRET=
 GOOGLE_DRIVE_REFRESH_TOKEN=
 PUXIN_DRIVE_ROOT_FOLDER_ID=11KCNFFXmZQG6CSITUNM_WfXA-nyOr0ah
 MINIMAX_H3_RUNNER_PATH=
+MINIMAX_H3_PYTHON=
+MINIMAX_H3_GPU=A100
+MINIMAX_H3_COLAB_AUTH=adc
+MINIMAX_H3_TIMEOUT=10800
 GOOGLE_CLOUD_PROJECT=
 GOOGLE_IMPERSONATE_SERVICE_ACCOUNT=
 GOOGLE_APPLICATION_CREDENTIALS=

@@ -64,7 +64,7 @@ export default function StudioLibrary() {
       data.scenes.sort((a: Imported, b: Imported) => (order.get(a.sourceId) ?? 0) - (order.get(b.sourceId) ?? 0));
       const clips: VideoClip[] = data.scenes.map((scene: Imported, index: number) => {
         const script = findPresetScene(preset, scene.sourceName, scene.panel);
-        return { plotName: `${index + 1} · ${scene.sourceName}${scene.panel === 'single' ? '' : scene.panel === 'top' ? ' 上格' : ' 下格'}`, text: script?.narration || '', imageUrl: scene.imageUrl, audioUrl: '', duration: script?.duration || 4, index, totalClips: data.scenes.length, imageEffect: 'none', transitionType: 'crossfade', transitionDuration: 0.35, sceneLayout: 'contain', showSceneSubtitle: false };
+        return { plotName: `${index + 1} · ${scene.sourceName}${scene.panel === 'single' ? '' : scene.panel === 'top' ? ' 上格' : ' 下格'}`, text: script?.narration || '', imageUrl: scene.imageUrl, audioUrl: '', duration: script?.duration || 4, index, totalClips: data.scenes.length, imageEffect: script?.motion || 'none', transitionType: 'crossfade', transitionDuration: 0.35, sceneLayout: 'fit-blur', showSceneSubtitle: false };
       });
       const record = await request('/api/puxin/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: title.trim() || preset?.title || '新的普新作品', project: { clips, subtitles: [], resolution: '1080p', aspectRatio: ratio, audioEnabled: true, bgmUrl: null, bgmVolume: 0.15, bgmStartTime: 0, bgmEndTime: null, brand: { enabled: false, closingText: '' } } }) });
       router.push(`/studio/${record.id}`);
