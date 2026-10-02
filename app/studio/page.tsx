@@ -1,121 +1,91 @@
 'use client';
-
-import { useEffect, useMemo, useState } from 'react';
+import Image from 'next/image';
+import Link from 'next/link';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { useAppStore } from '@/lib/store';
+import type { StudioProject } from '@/lib/puxin/projects';
 import type { SplitMode } from '@/lib/puxin/scene-split';
 import { findPresetScene, findPuxinStoryPreset } from '@/lib/puxin/story-presets';
-import type { VideoClip } from '@/src/types';
+import type { VideoClip, VideoAspectRatio } from '@/src/types';
+import './studio.css';
 
-interface DriveItem { id: string; name: string; mimeType: string; modifiedTime: string | null; size: number | null }
-interface BrowseResponse { folderId: string; folders: DriveItem[]; images: DriveItem[]; error?: string }
-interface DriveStatus {
-  configured: boolean;
-  connected: boolean;
-  rootFolderId: string;
-  mode?: 'service-account' | 'oauth' | 'unconfigured';
-  accessible?: boolean;
-  serviceAccount?: string;
-  error?: string;
-}
-interface ImportedScene { id: string; sourceName: string; panel: 'single' | 'top' | 'bottom'; confidence: number; imageUrl: string }
-
-const MOTIONS: VideoClip['imageEffect'][] = ['kenBurns', 'zoom', 'pan', 'zoomOut'];
-
-export default function PuxinStudioPage() {
+interface Source { id: string; name: string; url: string; local: boolean; selected: boolean; mode: SplitMode; splitPercent: number }
+interface Folder { id: string; name: string }
+interface Imported { sourceId: string; sourceName: string; panel: 'single' | 'top' | 'bottom'; imageUrl: string; confidence: number }
+async function request(url: string, init?: RequestInit) { const response = await fetch(url, init); const data = await response.json(); if (!response.ok || data.error) throw new Error(data.error || '讀取失敗，請再試一次'); return data; }
+export default function StudioLibrary() {
   const router = useRouter();
-  const setClips = useAppStore((state) => state.setClips);
-  const setProductData = useAppStore((state) => state.setProductData);
-  const setVideoAspectRatio = useAppStore((state) => state.setVideoAspectRatio);
-  const setVideoResolution = useAppStore((state) => state.setVideoResolution);
-  const [status, setStatus] = useState<DriveStatus | null>(null);
-  const [browse, setBrowse] = useState<BrowseResponse | null>(null);
-  const [activeFolder, setActiveFolder] = useState<DriveItem | null>(null);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [splitMode, setSplitMode] = useState<SplitMode>('auto');
-
+  const [projects, setProjects] = useState<StudioProject[]>([]);
+  const [sources, setSources] = useState<Source[]>([]);
+  const [folders, setFolders] = useState<Folder[]>([]);
+  const [breadcrumbs, setBreadcrumbs] = useState<Folder[]>([]);
+  const [driveReady, setDriveReady] = useState(false);
+  const [driveOutput, setDriveOutput] = useState(false);
+  const [title, setTitle] = useState('');
+  const [ratio, setRatio] = useState<VideoAspectRatio>('9:16');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   useEffect(() => {
-    fetch('/api/puxin/drive/status').then((r) => r.json()).then(setStatus).catch((err) => setError(String(err)));
+    request('/api/puxin/projects').then(data => setProjects(data.projects)).catch(error => setError(error.message));
+    request('/api/puxin/drive/status').then(data => setDriveReady(data.connected && data.accessible !== false)).catch(() => {});
+    request('/api/puxin/drive/output').then(data => setDriveOutput(data.writable)).catch(() => {});
   }, []);
-
-  useEffect(() => {
-    if (!status?.connected || status.accessible === false) return;
-    setLoading(true);
-    fetch('/api/puxin/drive/browse')
-      .then((r) => r.json())
-      .then((data: BrowseResponse) => { if (data.error) throw new Error(data.error); setBrowse(data); })
-      .catch((err) => setError(err instanceof Error ? err.message : String(err)))
-      .finally(() => setLoading(false));
-  }, [status?.connected]);
-
-  const sortedImages = useMemo(
-    () => [...(browse?.images ?? [])].sort((a, b) => a.name.localeCompare(b.name, 'zh-Hant', { numeric: true })),
-    [browse?.images],
-  );
-  const activePreset = useMemo(() => findPuxinStoryPreset(activeFolder?.name), [activeFolder?.name]);
-
-  async function openFolder(folder: DriveItem) {
-    setLoading(true); setError(null); setSelected(new Set());
+  async function browse(folder?: Folder, depth?: number) {
+    setBusy(true); setError('');
     try {
-      const response = await fetch(`/api/puxin/drive/browse?folder=${encodeURIComponent(folder.id)}`);
-      const data = (await response.json()) as BrowseResponse;
-      if (!response.ok || data.error) throw new Error(data.error || 'Unable to browse folder');
-      setBrowse(data); setActiveFolder(folder); setSelected(new Set(data.images.map((item) => item.id)));
-    } catch (err) { setError(err instanceof Error ? err.message : String(err)); }
-    finally { setLoading(false); }
+      const data = await request('/api/puxin/drive/browse' + (folder ? `?folder=${encodeURIComponent(folder.id)}` : ''));
+      setFolders(data.folders); setSources(data.images.map((item: Folder) => ({ ...item, url: `/api/puxin/drive/file/${item.id}`, local: false, selected: true, mode: 'single', splitPercent: 50 })));
+      setBreadcrumbs(depth !== undefined ? breadcrumbs.slice(0, depth) : folder ? [...breadcrumbs, folder] : []);
+      if (folder) setTitle(folder.name);
+    } catch (error) { setError(error instanceof Error ? error.message : '素材讀取失敗'); }
+    finally { setBusy(false); }
   }
-
-  function toggleImage(id: string) {
-    setSelected((prev) => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; });
-  }
-
-  async function createScenes() {
-    if (!selected.size) return;
-    setLoading(true); setError(null);
+  async function upload(files: FileList | null) {
+    if (!files) return; setBusy(true); setError('');
     try {
-      const orderedIds = sortedImages.filter((item) => selected.has(item.id)).map((item) => item.id);
-      const response = await fetch('/api/puxin/scenes/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fileIds: orderedIds, mode: splitMode }) });
-      const data = (await response.json()) as { scenes?: ImportedScene[]; error?: string };
-      if (!response.ok || !data.scenes) throw new Error(data.error || 'Scene import failed');
-      const total = data.scenes.length;
-      const clips: VideoClip[] = data.scenes.map((scene, index) => ({
-        ...(() => {
-          const presetScene = findPresetScene(activePreset, scene.sourceName, scene.panel);
-          return {
-            text: presetScene?.narration ?? '',
-            duration: presetScene?.duration ?? (scene.panel === 'single' && index === total - 1 ? 6 : 4),
-            imageEffect: presetScene?.motion ?? MOTIONS[index % MOTIONS.length],
-          };
-        })(),
-        plotName: `${String(index + 1).padStart(2, '0')} · ${scene.sourceName}${scene.panel === 'top' ? ' A' : scene.panel === 'bottom' ? ' B' : ''}`,
-        imageUrl: scene.imageUrl, audioUrl: '',
-        index, totalClips: total, transitionType: 'crossfade', transitionDuration: 0.35, sceneLayout: 'fit-blur', showSceneSubtitle: false,
-      }));
-      setClips(clips);
-      setProductData({ name: activePreset?.title || activeFolder?.name || '普新短影音', description: '', images: clips.map((clip) => clip.imageUrl!).filter(Boolean), reviews: [] });
-      setVideoAspectRatio('9:16'); setVideoResolution('1080p'); router.push('/video-edit');
-    } catch (err) { setError(err instanceof Error ? err.message : String(err)); }
-    finally { setLoading(false); }
+      for (const file of Array.from(files).sort((a,b) => a.name.localeCompare(b.name, 'zh-Hant', { numeric: true }))) {
+        const form = new FormData(); form.append('file', file);
+        const result = await request('/api/puxin/media', { method: 'POST', body: form });
+        if (result.kind !== 'image') throw new Error('建立作品時請選圖片；影片可在作品內替換');
+        setSources(prev => [...prev, { id: result.url, name: file.name, url: result.url, local: true, selected: true, mode: 'single', splitPercent: 50 }]);
+      }
+    } catch (error) { setError(error instanceof Error ? error.message : '圖片上傳失敗'); }
+    finally { setBusy(false); }
   }
-
-  return (
-    <main className="min-h-screen bg-[#f6f1e7] text-[#3d372d]">
-      <div className="mx-auto max-w-7xl px-5 py-8 sm:px-8 lg:px-10">
-        <header className="mb-8 flex flex-col gap-4 border-b border-[#cfc3ad] pb-6 sm:flex-row sm:items-end sm:justify-between">
-          <div><div className="mb-2 text-xs font-semibold tracking-[0.22em] text-[#9b7a52]">PUXIN MEDITATION CENTER</div><h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">普新短影音製作台</h1><p className="mt-2 text-sm text-[#766d60]">從 Google Drive 選素材，自動拆格並建立 9:16 場景。</p></div>
-          <a href="/" className="text-sm font-medium text-[#7a6549] underline underline-offset-4">一般素材上傳</a>
-        </header>
-        {error && <div className="mb-6 rounded-2xl border border-red-200 bg-red-50 px-5 py-4 text-sm text-red-700">{error}</div>}
-        {!status && <div className="rounded-3xl border border-[#d9cfbf] bg-white/70 p-8">正在檢查 Google Drive…</div>}
-        {status && !status.configured && <section className="rounded-3xl border border-[#d9cfbf] bg-white p-8 shadow-sm"><h2 className="text-xl font-semibold">需要設定 Google Drive OAuth</h2><p className="mt-3 max-w-2xl text-sm leading-7 text-[#766d60]">伺服器尚未設定 GOOGLE_DRIVE_CLIENT_ID / GOOGLE_DRIVE_CLIENT_SECRET。設定後即可直接瀏覽指定的普新素材資料夾。</p></section>}
-        {status?.mode === 'service-account' && status.accessible === false && <section className="rounded-3xl border border-amber-200 bg-amber-50 p-8 shadow-sm"><h2 className="text-xl font-semibold">還差 Google Drive 資料夾分享權限</h2><p className="mt-3 max-w-3xl text-sm leading-7 text-[#766d60]">Cloud 專案與 Vertex AI 已連線；請把普新素材根資料夾分享給服務帳戶「{status.serviceAccount}」，權限選「檢視者」。分享完成後重新整理此頁即可。</p><div className="mt-4 rounded-xl bg-white/80 px-4 py-3 font-mono text-xs text-[#6f5b3e]">{status.rootFolderId}</div></section>}
-        {status?.configured && !status.connected && <section className="rounded-3xl border border-[#d9cfbf] bg-white p-8 shadow-sm"><h2 className="text-xl font-semibold">連接你的 Google Drive</h2><p className="mt-3 text-sm text-[#766d60]">第一版只要求唯讀權限；素材匯入 VPS 暫存後建立 Scene。</p><a href="/api/puxin/drive/auth" className="mt-6 inline-flex rounded-full bg-[#6f5b3e] px-6 py-3 text-sm font-semibold text-white">連接 Google Drive</a></section>}
-        {status?.connected && !activeFolder && <section><div className="mb-4 flex items-center justify-between"><h2 className="text-xl font-semibold">選擇主題資料夾</h2><span className="text-xs text-[#8a8175]">根目錄：{status.rootFolderId}</span></div><div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">{(browse?.folders ?? []).map((folder) => <button key={folder.id} type="button" onClick={() => openFolder(folder)} className="rounded-3xl border border-[#d9cfbf] bg-white p-6 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-[#bfa882] hover:shadow-md"><div className="mb-10 text-xs font-semibold tracking-[0.18em] text-[#b09163]">STORY</div><div className="text-2xl font-semibold">{folder.name}</div><div className="mt-2 text-sm text-[#81786a]">開啟素材 →</div></button>)}</div></section>}
-        {status?.connected && activeFolder && <section><div className="mb-5 flex flex-wrap items-center justify-between gap-3"><div><button type="button" onClick={() => { setActiveFolder(null); setSelected(new Set()); }} className="mb-2 text-sm text-[#7a6549] underline underline-offset-4">← 回到主題列表</button><div className="flex flex-wrap items-center gap-3"><h2 className="text-2xl font-semibold">{activeFolder.name}</h2>{activePreset && <span className="rounded-full bg-[#e5dbc8] px-3 py-1 text-xs font-semibold text-[#6f5b3e]">已套用旁白腳本 · 約 {Math.round(activePreset.scenes.reduce((sum, scene) => sum + scene.duration, 0))} 秒</span>}</div><p className="mt-1 text-sm text-[#81786a]">已選 {selected.size} / {sortedImages.length} 張；依檔名數字排序後建立 Scene。</p></div><div className="flex flex-wrap items-center gap-3"><label className="text-xs font-medium text-[#766d60]">拆格方式 <select value={splitMode} onChange={(e) => setSplitMode(e.target.value as SplitMode)} className="ml-2 rounded-full border border-[#cfc3ad] bg-white px-3 py-2 text-sm"><option value="auto">自動判斷</option><option value="double">全部上下二格</option><option value="single">全部單格</option></select></label><button type="button" disabled={loading || !selected.size} onClick={createScenes} className="rounded-full bg-[#6f5b3e] px-6 py-3 text-sm font-semibold text-white disabled:opacity-40">{loading ? '處理中…' : '分析素材並建立 9:16 場景'}</button></div></div><div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">{sortedImages.map((item) => { const checked = selected.has(item.id); return <button key={item.id} type="button" onClick={() => toggleImage(item.id)} className={`overflow-hidden rounded-2xl border bg-white text-left shadow-sm ${checked ? 'border-[#8a704c] ring-2 ring-[#bca27a]/30' : 'border-[#ddd4c6]'}`}><div className="aspect-[4/5] bg-[#e9e1d5]"><img src={`/api/puxin/drive/file/${item.id}`} alt={item.name} className="h-full w-full object-cover" /></div><div className="flex items-center gap-3 p-3"><span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border text-xs ${checked ? 'border-[#6f5b3e] bg-[#6f5b3e] text-white' : 'border-[#bbb09f]'}`}>{checked ? '✓' : ''}</span><span className="truncate text-sm font-medium">{item.name}</span></div></button>; })}</div></section>}
-        {loading && !activeFolder && <div className="mt-6 text-sm text-[#81786a]">讀取素材中…</div>}
-      </div>
-    </main>
-  );
+  function changeSource(id: string, patch: Partial<Source>) { setSources(prev => prev.map(source => source.id === id ? { ...source, ...patch } : source)); }
+  async function create() {
+    const selected = sources.filter(s => s.selected); if (!selected.length) return;
+    setBusy(true); setError('');
+    try {
+      const data = await request('/api/puxin/scenes/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fileIds: selected.filter(s => !s.local).map(s => s.id), localImages: selected.filter(s => s.local), selections: Object.fromEntries(selected.map(s => [s.id, { mode: s.mode, splitPercent: s.splitPercent }])), mode: 'single' }) });
+      const preset = findPuxinStoryPreset(breadcrumbs.at(-1)?.name);
+      const order = new Map(selected.map((source, index) => [source.id, index]));
+      data.scenes.sort((a: Imported, b: Imported) => (order.get(a.sourceId) ?? 0) - (order.get(b.sourceId) ?? 0));
+      const clips: VideoClip[] = data.scenes.map((scene: Imported, index: number) => {
+        const script = findPresetScene(preset, scene.sourceName, scene.panel);
+        return { plotName: `${index + 1} · ${scene.sourceName}${scene.panel === 'single' ? '' : scene.panel === 'top' ? ' 上格' : ' 下格'}`, text: script?.narration || '', imageUrl: scene.imageUrl, audioUrl: '', duration: script?.duration || 4, index, totalClips: data.scenes.length, imageEffect: 'none', transitionType: 'crossfade', transitionDuration: 0.35, sceneLayout: 'contain', showSceneSubtitle: false };
+      });
+      const record = await request('/api/puxin/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: title.trim() || preset?.title || '新的普新作品', project: { clips, subtitles: [], resolution: '1080p', aspectRatio: ratio, audioEnabled: true, bgmUrl: null, bgmVolume: 0.15, bgmStartTime: 0, bgmEndTime: null, brand: { enabled: false, closingText: '' } } }) });
+      router.push(`/studio/${record.id}`);
+    } catch (error) { setError(error instanceof Error ? error.message : '建立作品失敗'); }
+    finally { setBusy(false); }
+  }
+  async function duplicate(record: StudioProject) {
+    try { const result = await request('/api/puxin/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: record.title + '（副本）', project: record.project, voice: record.voice, voiceStyle: record.voiceStyle }) }); router.push(`/studio/${result.id}`); } catch (error) { setError(error instanceof Error ? error.message : '複製失敗'); }
+  }
+  return <main className="puxin-app"><header className="puxin-header"><Link href="/studio" className="puxin-wordmark">普新<span>內容製作台</span></Link><span className="puxin-caption">把一個故事，好好說完。</span></header><div className="puxin-shell">
+    <div className="puxin-intro"><div><p className="puxin-eyebrow">你的作品</p><h1>從一張圖，開始分享。</h1><p>保留原圖，寫下旁白。每個作品都能保存，隨時回來繼續。</p></div><Link className="puxin-quiet" href="/legacy">開啟一般剪輯器 ↗</Link></div>
+    {error && <p role="alert" className="puxin-error">{error}</p>}{notice && <p role="status" className="puxin-notice">{notice}</p>}
+    <section className="puxin-library">{projects.length ? projects.map(record => <article className="puxin-project-card" key={record.id}><Link href={`/studio/${record.id}`} className="puxin-project-cover">{record.project.clips[0]?.imageUrl && <Image unoptimized width={1080} height={1440} src={record.project.clips[0].imageUrl} alt="" />}<span>{record.project.aspectRatio}</span></Link><div><Link href={`/studio/${record.id}`}><h2>{record.title}</h2></Link><p>{record.project.clips.length} 個場景 · {new Date(record.updatedAt).toLocaleDateString('zh-TW')}</p><button onClick={() => duplicate(record)}>複製作品</button></div></article>) : <div className="puxin-empty">還沒有作品。先選圖片，下次就能從這裡繼續。</div>}</section>
+    <section className="puxin-panel"><div className="puxin-section-title"><div><p className="puxin-eyebrow">建立作品</p><h2>選擇故事素材</h2></div><div className="puxin-actions"><label className="puxin-button secondary">從電腦選圖<input type="file" accept="image/png,image/jpeg,image/webp" multiple hidden disabled={busy} onChange={e => { upload(e.target.files); e.target.value = ''; }} /></label><button className="puxin-button secondary" disabled={busy || !driveReady} onClick={() => browse()}>從 Drive 選圖</button></div></div>
+      <div className="puxin-form-row"><label>作品名稱<input value={title} onChange={e => setTitle(e.target.value)} placeholder="例如：情緒有解｜水壺的啟示" maxLength={120} /></label><label>輸出比例<select value={ratio} onChange={e => setRatio(e.target.value as VideoAspectRatio)}><option value="9:16">9:16 · 直式短影音</option><option value="3:4">3:4 · 完整圖文</option></select></label></div>
+      <p className="puxin-help">預設保留完整圖片。只有你選擇拆格的圖片，才會切成兩個場景。</p>
+      {!!breadcrumbs.length && <nav className="puxin-breadcrumb"><button disabled={busy} onClick={() => browse()}>素材根目錄</button>{breadcrumbs.map((folder, index) => <button disabled={busy} key={folder.id} onClick={() => browse(folder, index + 1)}>／ {folder.name}</button>)}</nav>}
+      {!!folders.length && <div className="puxin-folders">{folders.map(folder => <button disabled={busy} key={folder.id} onClick={() => browse(folder)}>▱ {folder.name} →</button>)}</div>}
+      {!!sources.length && <><div className="puxin-actions"><button onClick={() => setSources(prev => prev.map(s => ({ ...s, selected: true })))}>全部選取</button><button onClick={() => { setSources([]); setNotice('已清除這次的選圖，已保存的作品不受影響。'); }}>清除選圖</button></div><div className="puxin-source-grid">{sources.map(source => <article key={source.id}><div className="puxin-source-preview"><Image unoptimized width={1080} height={1440} src={source.url} alt={source.name} />{source.mode === 'double' && <div className="puxin-divider" style={{ top: `${source.splitPercent}%` }} />}</div><label className="puxin-checkbox"><input type="checkbox" checked={source.selected} onChange={e => changeSource(source.id, { selected: e.target.checked })} />{source.name}</label><select aria-label={`${source.name} 的圖片處理`} value={source.mode} onChange={e => changeSource(source.id, { mode: e.target.value as SplitMode })}><option value="single">保留整張</option><option value="double">拆成上下兩格</option></select>{source.mode === 'double' && <label className="puxin-help">分隔線 {source.splitPercent}%<input type="range" min={10} max={90} value={source.splitPercent} onChange={e => changeSource(source.id, { splitPercent: Number(e.target.value) })} /></label>}</article>)}</div></>}
+      <div className="puxin-create"><span>{sources.filter(s => s.selected).length} 張已選 · 每次最多 30 張</span><button className="puxin-button" disabled={busy || !sources.some(s => s.selected)} onClick={create}>{busy ? '處理素材中…' : '建立作品 →'}</button></div>
+    </section>
+    <section className="puxin-drive-status"><div><h2>成果保存到 Google Drive</h2><p>IG輪播素材／製作成果／作品名稱。匯出後保存影片、旁白與作品設定。</p></div>{driveOutput ? <span className="puxin-ready">已連接成果上傳</span> : <a className="puxin-button secondary" href="/api/puxin/drive/auth">連接成果上傳</a>}</section>
+  </div></main>;
 }

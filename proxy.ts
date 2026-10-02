@@ -1,3 +1,4 @@
+import { isSignedRenderMedia } from '@/lib/puxin/media-auth';
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 
@@ -68,7 +69,7 @@ function isCrossSiteMutation(request: NextRequest): boolean {
 function requiresBasicAuth(request: NextRequest): boolean {
   const expected = process.env.PUXIN_BASIC_AUTH_HEADER?.trim();
   if (!expected) return false;
-  return request.headers.get('authorization') !== expected;
+  return request.headers.get('authorization') !== expected && !isSignedRenderMedia(new URL(request.url), request.method);
 }
 
 export function proxy(request: NextRequest) {
@@ -82,7 +83,13 @@ export function proxy(request: NextRequest) {
       NextResponse.json({ error: 'Cross-site requests are not allowed' }, { status: 403 }),
     );
   }
-  return applySecurityHeaders(NextResponse.next());
+  const response = applySecurityHeaders(NextResponse.next());
+  // The headless renderer runs on its own temporary port. Only a signed,
+  // file-specific GET may read media across that origin boundary.
+  if (isSignedRenderMedia(new URL(request.url), request.method)) {
+    response.headers.set('Cross-Origin-Resource-Policy', 'cross-origin');
+  }
+  return response;
 }
 
 // Skip Next.js internal asset routes — security headers on those add no value

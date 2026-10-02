@@ -17,7 +17,7 @@ type WideProps = Record<string, unknown>;
 const RemotionRoot: React.FC = () => {
   // 複数の解像度とアスペクト比でコンポジションを登録
   const resolutions: VideoResolution[] = ['720p', '1080p'];
-  const aspectRatios: VideoAspectRatio[] = ['16:9', '9:16', '1:1'];
+  const aspectRatios: VideoAspectRatio[] = ['16:9', '9:16', '1:1', '3:4'];
   
   return (
     <>

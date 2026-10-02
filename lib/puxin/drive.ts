@@ -1,5 +1,7 @@
 import { chmod, mkdir, readFile, writeFile } from 'fs/promises';
 import path from 'path';
+import { dataRoot } from './paths';
+import { driveOauthOrigin } from './oauth-origin';
 import { google, type drive_v3 } from 'googleapis';
 import type { OAuth2Client } from 'google-auth-library';
 import {
@@ -11,7 +13,7 @@ import {
 export const PUXIN_DRIVE_ROOT_FOLDER_ID =
   process.env.PUXIN_DRIVE_ROOT_FOLDER_ID?.trim() || '11KCNFFXmZQG6CSITUNM_WfXA-nyOr0ah';
 
-const TOKEN_PATH = path.join(process.cwd(), '.data', 'google-drive-token.json');
+const tokenPath = () => path.join(dataRoot(), 'google-drive-token.json');
 const DRIVE_SCOPES = ['https://www.googleapis.com/auth/drive.readonly'];
 const DRIVE_ID_RE = /^[A-Za-z0-9_-]{10,200}$/;
 
@@ -37,7 +39,7 @@ export async function getStoredRefreshToken(): Promise<string | null> {
   const envToken = process.env.GOOGLE_DRIVE_REFRESH_TOKEN?.trim();
   if (envToken) return envToken;
   try {
-    const raw = await readFile(TOKEN_PATH, 'utf8');
+    const raw = await readFile(tokenPath(), 'utf8');
     const parsed = JSON.parse(raw) as { refresh_token?: string };
     return parsed.refresh_token?.trim() || null;
   } catch {
@@ -46,13 +48,13 @@ export async function getStoredRefreshToken(): Promise<string | null> {
 }
 
 export async function saveRefreshToken(refreshToken: string): Promise<void> {
-  const dir = path.dirname(TOKEN_PATH);
+  const dir = path.dirname(tokenPath());
   await mkdir(dir, { recursive: true });
-  await writeFile(TOKEN_PATH, JSON.stringify({ refresh_token: refreshToken }, null, 2), {
+  await writeFile(tokenPath(), JSON.stringify({ refresh_token: refreshToken }, null, 2), {
     encoding: 'utf8',
     mode: 0o600,
   });
-  await chmod(TOKEN_PATH, 0o600).catch(() => undefined);
+  await chmod(tokenPath(), 0o600).catch(() => undefined);
 }
 
 export function createOauthClient(origin: string) {
@@ -60,7 +62,7 @@ export function createOauthClient(origin: string) {
   if (!configured || !clientId || !clientSecret) {
     throw new Error('Google Drive OAuth is not configured');
   }
-  const redirectUri = `${origin.replace(/\/$/, '')}/api/puxin/drive/callback`;
+  const redirectUri = `${driveOauthOrigin(origin)}/api/puxin/drive/callback`;
   return new google.auth.OAuth2(clientId, clientSecret, redirectUri);
 }
 
@@ -78,12 +80,13 @@ export async function createAuthorizedDrive(origin: string): Promise<drive_v3.Dr
   return google.drive({ version: 'v3', auth });
 }
 
-export function buildDriveConsentUrl(origin: string): string {
+export function buildDriveConsentUrl(origin: string, state?: string): string {
   const auth = createOauthClient(origin);
   return auth.generateAuthUrl({
+    state,
     access_type: 'offline',
     prompt: 'consent',
-    scope: DRIVE_SCOPES,
+    scope: ['https://www.googleapis.com/auth/drive'],
     include_granted_scopes: true,
   });
 }
@@ -143,15 +146,22 @@ export async function listDriveChildren(
   folderId: string,
 ): Promise<{ folders: DriveBrowserItem[]; images: DriveBrowserItem[] }> {
   if (!isDriveId(folderId)) throw new Error('Invalid Drive folder id');
+  const files: drive_v3.Schema$File[] = [];
+  let pageToken: string | undefined;
+  do {
   const result = await drive.files.list({
     q: `'${folderId}' in parents and trashed = false`,
     orderBy: 'folder,name',
     pageSize: 100,
-    fields: 'files(id,name,mimeType,modifiedTime,size)',
+    fields: 'nextPageToken,files(id,name,mimeType,modifiedTime,size)',
+    pageToken,
     supportsAllDrives: true,
     includeItemsFromAllDrives: true,
   });
-  const items: DriveBrowserItem[] = (result.data.files ?? [])
+  files.push(...(result.data.files ?? []));
+  pageToken = result.data.nextPageToken || undefined;
+  } while (pageToken);
+  const items: DriveBrowserItem[] = files
     .filter((item): item is drive_v3.Schema$File & { id: string; name: string; mimeType: string } =>
       Boolean(item.id && item.name && item.mimeType),
     )

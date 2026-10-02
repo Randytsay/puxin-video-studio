@@ -63,7 +63,7 @@ async function detectDivider(buffer: Buffer): Promise<{ splitY: number | null; c
   return { splitY: best.y, confidence: best.score, width, height };
 }
 
-export async function splitComicImage(buffer: Buffer, mode: SplitMode = 'auto'): Promise<SplitAnalysis> {
+export async function splitComicImage(buffer: Buffer, mode: SplitMode = 'auto', manualSplitPercent?: number): Promise<SplitAnalysis> {
   const detected = await detectDivider(buffer);
   if (mode === 'single') {
     const normalized = await sharp(buffer).rotate().png().toBuffer({ resolveWithObject: true });
@@ -87,9 +87,9 @@ export async function splitComicImage(buffer: Buffer, mode: SplitMode = 'auto'):
 
   const normalizedInput = sharp(buffer).rotate();
   const metadata = await normalizedInput.metadata();
-  const width = metadata.width ?? detected.width;
-  const height = metadata.height ?? detected.height;
-  const splitY = detected.splitY ?? Math.round(height / 2);
+  const width = detected.width || metadata.width!;
+  const height = detected.height || metadata.height!;
+  const splitY = manualSplitPercent !== undefined && Number.isFinite(manualSplitPercent) && manualSplitPercent >= 10 && manualSplitPercent <= 90 ? Math.round(height * manualSplitPercent / 100) : detected.splitY ?? Math.round(height / 2);
   const gap = Math.max(2, Math.round(height * 0.0025));
   const topHeight = Math.max(1, splitY - gap);
   const bottomTop = Math.min(height - 1, splitY + gap);

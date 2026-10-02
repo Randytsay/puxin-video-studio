@@ -17,7 +17,7 @@ interface ImageEffectsProps {
   effect?: 'zoom' | 'pan' | 'kenBurns' | 'zoomOut' | 'pulse' | 'none';
   scale?: number; // 画像のスケール（1.0 = 100%, 0.5 = 50%, 2.0 = 200%）
   position?: { x: number; y: number }; // 画像の位置（%で指定）
-  layoutMode?: 'cover' | 'fit-blur';
+  layoutMode?: 'cover' | 'fit-blur' | 'contain';
 }
 
 // Treat a clip's primary visual asset as a video when its URL points at a
@@ -38,7 +38,8 @@ function resolveAssetSrc(url: string): string {
     try {
       const u = new URL(url);
       const isLocalhost = u.hostname === 'localhost' || u.hostname === '127.0.0.1';
-      const isPublicPath = u.pathname.startsWith('/uploads/') || u.pathname.startsWith('/gold/');
+      const isPublicPath = u.pathname.startsWith('/uploads/') || u.pathname.startsWith('/gold/') || u.pathname.startsWith('/api/puxin/media/');
+      if (isLocalhost && u.pathname.startsWith('/api/puxin/media/')) return url;
       if (isLocalhost && isPublicPath) {
         return staticFile(u.pathname.replace(/^\//, ''));
       }
@@ -131,7 +132,7 @@ export const ImageWithEffects: React.FC<ImageEffectsProps> = ({
   const style: React.CSSProperties = {
     width: '100%',
     height: '100%',
-    objectFit: layoutMode === 'fit-blur' ? 'contain' : 'cover',
+    objectFit: layoutMode !== 'cover' ? 'contain' : 'cover',
     transformOrigin: 'center center', // 変換の基準点を中央に設定
   };
 
@@ -268,7 +269,9 @@ export const ImageWithEffects: React.FC<ImageEffectsProps> = ({
       const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1';
       const isPublicPath = relativePath.startsWith('/uploads/') || relativePath.startsWith('/gold/');
       
-      if (isLocalhost && isPublicPath) {
+      if (isLocalhost && relativePath.startsWith('/api/puxin/media/')) {
+        imageSrc = imageUrl;
+      } else if (isLocalhost && isPublicPath) {
         // staticFileはpublicディレクトリからの相対パスを期待
         // /uploads/... → uploads/... (先頭の/を削除)
         const staticPath = relativePath.startsWith('/') ? relativePath.slice(1) : relativePath;
@@ -374,6 +377,8 @@ export const ImageWithEffects: React.FC<ImageEffectsProps> = ({
     objectFit: style.objectFit,
     transformOrigin: style.transformOrigin,
   });
+
+  if (layoutMode === 'contain') return <AbsoluteFill style={{ backgroundColor: '#f0eee8' }}><Img src={imageSrc} style={{ ...style, width: '100%', height: '100%', objectFit: 'contain' }} /></AbsoluteFill>;
 
   if (layoutMode === 'fit-blur') {
     return (
