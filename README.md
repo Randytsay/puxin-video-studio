@@ -1,3 +1,9 @@
+# Puxin Video Studio
+
+Production/operator documentation: [`docs/production-runbook.md`](docs/production-runbook.md) and [`docs/puxin-studio-v1.md`](docs/puxin-studio-v1.md).
+
+This repository is a Puxin-focused fork of Abekyo Editor. The original upstream README is retained below for the underlying editor/rendering architecture.
+
 # Abekyo Editor
 
 [日本語版 / Japanese](./README.ja.md)

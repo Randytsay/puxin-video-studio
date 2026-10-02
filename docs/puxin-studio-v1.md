@@ -13,9 +13,9 @@
 
 ## 部署與資料
 
-目前沿用 `puxin-video-studio-app` Docker（host network，`127.0.0.1:3110`）與既有 Cloudflare Tunnel。`PUXIN_RENDER_ORIGIN=http://127.0.0.1:3110`。獨立 systemd 範例 `deploy/puxin-video-studio.service` 可供日後遷移，但不可同時啟用：單程序 Next.js 服務，內部 `127.0.0.1:3471`，每次只處理一支影片，佇列最多十支。不可使用多個服務程序共同執行 worker。5 秒輪詢可在重啟後恢復佇列；被中斷的影片由頭重製。
+正式入口為 `https://video-studio.puxin.ccwu.cc/studio`。目前使用 `puxin-video-studio-app` Docker（host network，`127.0.0.1:3110`）與 Cloudflare Named Tunnel `puxin-video-studio`。`PUXIN_RENDER_ORIGIN=http://127.0.0.1:3110`、`PUXIN_PUBLIC_ORIGIN=https://video-studio.puxin.ccwu.cc`。獨立 systemd 範例 `deploy/puxin-video-studio.service` 可供日後遷移，但不可同時啟用：單程序 Next.js 服務，每次只處理一支影片，佇列最多十支。不可使用多個服務程序共同執行 worker。5 秒輪詢可在重啟後恢復佇列；被中斷的影片由頭重製。
 
-現有 Docker 資料：`/srv/ai-workspace/projects/puxin-video-studio/.data/studio`（/app 綁定掛載到 canonical 專案，所以容器重啟不丟資料）；改用 systemd 時範例為 `/srv/ai-workspace/shared/puxin-video-studio`，包含 SQLite、原素材、音訊、成果與 OAuth token。不可當作建置快取刪除。瀏覽器重開從 SQLite 還原；部署不清理素材。
+現有 Docker 與備用 systemd 部署都統一使用 `/srv/ai-workspace/projects/puxin-video-studio/.data/studio`，包含 SQLite、原素材、音訊、Veo 影片、成果與 OAuth token。不可當作建置快取刪除。瀏覽器重開從 SQLite 還原；部署不清理素材。
 
 原有 Basic auth 保留；內部渲染器使用一小時有效、單一檔案的簽章 GET。只有正確簽章的素材回應允許跨來源讀取，作品 API 仍要求登入。正式域名透過既有 HTTPS 反向代理或 Tunnel 接入內部連接埠；不要直接公開 3471。
 
@@ -49,4 +49,4 @@ Drive 寫入授權已由 `randy.tsay@gmail.com` 完成。VPS 驗證指定「IG�
 
 驗收匯出 `e3ba6d4c-5c01-42e0-9687-d88bfac44521` 的 MP4、設定 JSON、腳本 TXT 已透過正式上傳 API 同步，並於 Drive UI 確認三個檔案。此驗收作品沒有旁白音訊；不代表 Gemini-TTS 聲音驗收已完成。成果目錄：[驗收｜水壺故事完整原圖](https://drive.google.com/drive/folders/1temEuy0gcB36mYMEjbqUhXsi9PSJmLY0)。
 
-OAuth 目前為 External／Testing，Drive refresh token 按 Google 規則七天到期。長期使用前需完成品牌設定及適用的發布／驗證流程，並換成固定網域。目前 Cloudflare Quick Tunnel 的位址若變更，須同步更新公開 origin 與 Console 回呼登記。V1 基礎版本已提交並推送至 `feat/puxin-studio-v01`；後續修改同樣必須在上線前完成測試、commit 與 push。
+OAuth 目前為 External／Testing；長期使用前仍需完成適用的 OAuth 發布／驗證流程。正式固定網域與 Console 回呼已改為 `video-studio.puxin.ccwu.cc`，不再依賴 Quick Tunnel。V1 基礎版本已提交並推送至 `feat/puxin-studio-v01`；後續修改同樣必須在上線前完成測試、commit 與 push。完整營運資料見 `docs/production-runbook.md`。
