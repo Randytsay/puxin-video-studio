@@ -43,6 +43,17 @@ The app is protected by HTTP Basic Auth. Credentials and the precomputed `PUXIN_
 
 Do not delete `.data/studio` during deploys or cache cleanup.
 
+### Private off-site backups
+
+- Private R2 bucket: `puxin-video-studio-backups`
+- Prefix: `puxin-video-studio/daily/`
+- The daily systemd backup creates a consistent SQLite snapshot plus the complete `media/` tree, keeps a normal `.tar.gz` locally, computes SHA-256, and uploads a private R2 copy.
+- Backups larger than Wrangler's single-object limit are split into 250 MiB parts. A `.manifest.json` is uploaded last and acts as the completion marker. It contains archive size/hash and every part's size/hash.
+- OAuth tokens and deployment secrets are deliberately not included in the archive. After a disaster restore, Drive OAuth may need to be authorized again.
+- Local retention is seven days. R2 remote retention is currently indefinite; add a lifecycle rule later if storage growth warrants it.
+
+Restore a multipart backup by downloading the manifest, all named parts and the `.sha256` file from the private bucket, verifying each part hash, concatenating the parts in numeric order, verifying the final archive hash, stopping the app, and restoring `studio.sqlite` + `media/` into the data root.
+
 ## Cloudflare R2 release media
 
 - Bucket: `puxin-enrollment-media`
@@ -51,7 +62,7 @@ Do not delete `.data/studio` during deploys or cache cleanup.
 - The original ambient BGM `茶煙・心靜` is stored under `puxin-video-studio/audio/chayan-xinjing-20261002.mp3`; it was procedurally synthesized for this project and normalized to about `-24.9 LUFS`.
 - Current water-kettle release: `https://pub-81becb6c33d744ad9c8bff0f27c0d785.r2.dev/puxin-video-studio/releases/water-kettle-meditation-20261002.mp4`
 
-R2 is currently a publication target, not the full off-site application backup. Do not treat a published MP4 as a replacement for SQLite/media backups.
+The public release bucket and the private backup bucket are intentionally separate. Never upload SQLite/application backups to the public `puxin-enrollment-media` bucket.
 
 ## Google Cloud / Vertex AI
 
@@ -97,6 +108,7 @@ Do not put OAuth client secrets or refresh tokens in this repository.
 4. `GET /api/puxin/drive/output` reports `connected=true` and `writable=true`.
 5. `GET /api/puxin/providers` reports Vertex providers configured.
 6. Docker containers `puxin-video-studio-app` and `puxin-video-studio-tunnel` are running.
+7. `systemctl status puxin-video-studio-backup.timer` is active, and the newest private R2 backup has a manifest completion marker.
 
 ## Secret inventory — names only
 

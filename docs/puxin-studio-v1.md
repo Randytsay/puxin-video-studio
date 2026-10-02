@@ -55,4 +55,8 @@ Drive 寫入授權已由 `randy.tsay@gmail.com` 完成。VPS 驗證指定「IG�
 
 MiniMax H3 已以外部 runner 方式整合進 V1 API 與場景 UI；外部 skill 原始碼維持在 Git 之外。Google Colab CLI + ADC 連線測試成功，但目前連線帳號回報 compute-unit balance `0.0`，因此這次成片未消耗 H3 額度，仍使用既有兩段 Veo 動態場景。
 
+Veo 與 H3 動態化已改為 SQLite 持久化背景工作，不再由瀏覽器持續等待模型完成。Veo 保存 Vertex operation name 並由 server worker 輪詢，因此關頁或服務重啟後可以接續；H3 由 server 啟動外部 runner，瀏覽器可以離開，若服務重啟則從同一筆 durable request 重新排隊。完成影片不會在背景強制覆蓋使用者後續編輯；若場景在生成期間沒有變更，可從作品頁一鍵套用。
+
+每日備份已由「同機本地 7 天」擴充為「本地 + 私有 Cloudflare R2」：私有 bucket `puxin-video-studio-backups` 保存 SQLite snapshot 與完整 media；大於 Wrangler 單檔限制時自動切成 250 MiB parts，並以 SHA-256 與最後上傳的 manifest 作完整性／完成標記。OAuth token 與部署 secret 不進備份，也不會放到公開 R2。
+
 OAuth 目前為 External／Testing；長期使用前仍需完成適用的 OAuth 發布／驗證流程。正式固定網域與 Console 回呼已改為 `video-studio.puxin.ccwu.cc`，不再依賴 Quick Tunnel。V1 基礎版本已提交並推送至 `feat/puxin-studio-v01`；後續修改同樣必須在上線前完成測試、commit 與 push。完整營運資料見 `docs/production-runbook.md`。

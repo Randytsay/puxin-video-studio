@@ -81,10 +81,13 @@ The first bulk run reached Vertex quota/rate limiting at scene 12 (`429 Resource
 
 ### P0 — recommended before calling the product V1.0 final
 
-1. **Durable AI-generation queue.** TTS transient retry is complete, but bulk TTS and Veo/H3 orchestration should ultimately be persisted as resumable server-side jobs rather than relying on one browser workflow.
-2. **Persist Veo long-running jobs.** A browser close/reload currently loses the client-side polling context. Store operation name/status in SQLite and let a server worker resume polling and attach the result.
-3. **Off-site backup.** Current database/media backups live on the same VPS. R2 is now used for shareable release media, but the full application backup still needs off-site replication.
-4. **OAuth production status.** The owner OAuth app is still External/Testing. Complete the appropriate Google OAuth publishing/verification path for long-term refresh-token stability.
+1. **Durable bulk TTS queue.** TTS transient retry is complete, but “generate all narration” still runs as one browser workflow. Persist the batch itself if unattended bulk narration becomes important.
+2. **OAuth production status.** The owner OAuth app is still External/Testing. Complete the appropriate Google OAuth publishing/verification path for long-term refresh-token stability.
+
+Completed reliability items:
+
+- Veo/H3 scene generation now uses SQLite-backed server jobs. Veo operation names survive service/browser restarts and server polling resumes automatically. H3 runs independently of the browser; after a service restart its local runner job is safely re-queued from the same durable request.
+- Application data now receives a daily private R2 off-site copy in `puxin-video-studio-backups`. Large archives are chunked, hashed and completed with a manifest; local seven-day backups remain for fast recovery.
 
 ### P1 — product-quality improvements
 
@@ -107,4 +110,4 @@ The first bulk run reached Vertex quota/rate limiting at scene 12 (`429 Resource
 
 The current implementation matches the original core plan: Drive → panel scenes → narration → optional AI motion → BGM/subtitles → Remotion MP4. It also exceeds the original plan in persistence, Drive output, durable rendering, fixed-domain deployment and backups.
 
-The remaining work is primarily reliability and operator-product polish rather than missing core video-generation capability. The four P0 items above are the practical boundary between “working V1” and “production-final V1.0”.
+The remaining work is primarily operator-product polish and OAuth lifecycle hardening rather than missing core video-generation capability.

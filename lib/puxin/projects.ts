@@ -28,7 +28,26 @@ export function database(): Database {
   connectionRoot = root;
   connection.exec(`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;
     CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, title TEXT NOT NULL, revision INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, document TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, revision INTEGER NOT NULL, status TEXT NOT NULL, progress REAL NOT NULL DEFAULT 0, error TEXT, video_url TEXT, drive_url TEXT, sync_error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, snapshot TEXT NOT NULL);`);
+    CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, revision INTEGER NOT NULL, status TEXT NOT NULL, progress REAL NOT NULL DEFAULT 0, error TEXT, video_url TEXT, drive_url TEXT, sync_error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, snapshot TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS ai_jobs (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      project_revision INTEGER NOT NULL,
+      clip_index INTEGER NOT NULL,
+      provider TEXT NOT NULL,
+      status TEXT NOT NULL,
+      progress REAL NOT NULL DEFAULT 0,
+      source_image_url TEXT NOT NULL,
+      input_json TEXT NOT NULL,
+      external_id TEXT,
+      video_url TEXT,
+      error TEXT,
+      applied_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS ai_jobs_project_idx ON ai_jobs(project_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS ai_jobs_status_idx ON ai_jobs(status, created_at);`);
   return connection;
 }
 function parseProject(row: Row): StudioProject { return JSON.parse(String(row.document)); }
