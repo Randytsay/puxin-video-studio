@@ -15,7 +15,7 @@
 
 目前沿用 `puxin-video-studio-app` Docker（host network，`127.0.0.1:3110`）與既有 Cloudflare Tunnel。`PUXIN_RENDER_ORIGIN=http://127.0.0.1:3110`。獨立 systemd 範例 `deploy/puxin-video-studio.service` 可供日後遷移，但不可同時啟用：單程序 Next.js 服務，內部 `127.0.0.1:3471`，每次只處理一支影片，佇列最多十支。不可使用多個服務程序共同執行 worker。5 秒輪詢可在重啟後恢復佇列；被中斷的影片由頭重製。
 
-現有 Docker 與備用 systemd 部署都統一使用 `/srv/ai-workspace/projects/puxin-video-studio/.data/studio`，包含 SQLite、原素材、音訊、成果與 OAuth token。不可當作建置快取刪除。瀏覽器重開從 SQLite 還原；部署不清理素材。
+現有 Docker 資料：`/srv/ai-workspace/projects/puxin-video-studio/.data/studio`（/app 綁定掛載到 canonical 專案，所以容器重啟不丟資料）；改用 systemd 時範例為 `/srv/ai-workspace/shared/puxin-video-studio`，包含 SQLite、原素材、音訊、成果與 OAuth token。不可當作建置快取刪除。瀏覽器重開從 SQLite 還原；部署不清理素材。
 
 原有 Basic auth 保留；內部渲染器使用一小時有效、單一檔案的簽章 GET。只有正確簽章的素材回應允許跨來源讀取，作品 API 仍要求登入。正式域名透過既有 HTTPS 反向代理或 Tunnel 接入內部連接埠；不要直接公開 3471。
 
@@ -33,14 +33,20 @@
 
 ## 範圍與驗收界線
 
-V1 主要是原圖故事製作、旁白、持久化與影片輸出。既有 Veo API／一般剪輯器維持相容；新製作台尚未加入一鍵 Veo 運鏡按鈕。沒有社群發布或批次生圖。文字字幕為場景級，尚未提供逐字對齊。
+V1 主要是原圖故事製作、旁白、持久化與影片輸出。新版作品編輯頁已可針對單一靜態場景二次確認後呼叫 Veo 3.1 Fast，生成完成後自動替換該場景；影片保存到持久化 media store 並納入備份。沒有社群發布或批次生圖。文字字幕為場景級，尚未提供逐字對齊。
 
 本機測試與 VPS 建置／服務／实际影片輸出需各自確認。Google OAuth 未完成時上傳會明示需求，不會把本機下載誤報為 Drive 已同步。
 
 ## 2026-10-02 驗收紀錄
 
-本機與 VPS 各 253 個測試通過；lint 0 錯誤／93 個既有警告。VPS Node 預設 heap 太小，建置使用 `NODE_OPTIONS=--max-old-space-size=4096 node node_modules/next/dist/bin/next build`。
+目前完整測試 260 個通過；lint 無新增錯誤。VPS Node 預設 heap 太小，建置使用 `NODE_OPTIONS=--max-old-space-size=4096 node node_modules/next/dist/bin/next build`。部署時先停止正在使用同一 `.next` 目錄的 runtime，再做 production build，避免 Turbopack 與執行中服務同時碰建置目錄。
 
 真實圖片匯入確認完整尺寸保留、手動拆兩格與保存重開。實際 3:4（720×960 H.264）與 9:16（720×1280 H.264＋AAC）影片解碼通過。VPS 登入保護、單檔簽章素材 Range、服務重啟後無瀏覽器輪詢的自動續跑、SQLite 備份解壓完整性檢查通過。原圖模式關閉舊商品模板裝飾，避免暗色遮罩蓋住原圖文字。
 
-Google SA 讀取指定 Drive 素材目錄已驗證。Gemini-TTS REST 配置、PCM 包裝與快取以模擬回應驗證，尚未執行付費聲音驗收。個人 Drive 寫入仍需擁有人 OAuth；目前成果沒有同步到 Drive。
+Google SA 讀取指定 Drive 素材目錄已驗證。Gemini-TTS 已用 Kore 對「那天，我跟師父說，我真的快冒煙了。」做真實 Vertex 驗收，成功產生 24kHz mono PCM WAV、長度約 6.92 秒；聲音風格仍需由使用者實際試聽決定預設聲線。Veo 3.1 Fast 也已完成真實 4 秒 9:16 測試。
+
+Drive 寫入授權已由 `randy.tsay@gmail.com` 完成。VPS 驗證指定「IG輪播素材」目錄 `connected=true`、`writable=true`，refresh token 保存於資料目錄並限制為 0600。修正反向代理 OAuth origin 後，額外 6 個回歸測試、本機 TypeScript、VPS production build 通過；實際公開回呼、取消後跳轉、安全 cookie、錯誤 state 拒絕及未登入 401 均驗證。
+
+驗收匯出 `e3ba6d4c-5c01-42e0-9687-d88bfac44521` 的 MP4、設定 JSON、腳本 TXT 已透過正式上傳 API 同步，並於 Drive UI 確認三個檔案。此驗收作品沒有旁白音訊；不代表 Gemini-TTS 聲音驗收已完成。成果目錄：[驗收｜水壺故事完整原圖](https://drive.google.com/drive/folders/1temEuy0gcB36mYMEjbqUhXsi9PSJmLY0)。
+
+OAuth 目前為 External／Testing，Drive refresh token 按 Google 規則七天到期。長期使用前需完成品牌設定及適用的發布／驗證流程，並換成固定網域。目前 Cloudflare Quick Tunnel 的位址若變更，須同步更新公開 origin 與 Console 回呼登記。V1 基礎版本已提交並推送至 `feat/puxin-studio-v01`；後續修改同樣必須在上線前完成測試、commit 與 push。

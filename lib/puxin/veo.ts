@@ -2,12 +2,12 @@ import { mkdir, readFile, writeFile } from 'fs/promises';
 import path from 'path';
 import sharp from 'sharp';
 import { createGoogleAuthClient, GOOGLE_CLOUD_PROJECT } from '@/lib/puxin/google-auth';
+import { existingMediaPath, mediaPath, mediaUrl } from '@/lib/puxin/paths';
 
 const CLOUD_PLATFORM_SCOPE = 'https://www.googleapis.com/auth/cloud-platform';
 const VEO_LOCATION = process.env.VERTEX_VIDEO_LOCATION?.trim() || 'us-central1';
 const VEO_MODEL = process.env.VERTEX_VIDEO_MODEL?.trim() || 'veo-3.1-fast-generate-001';
 const PUXIN_IMAGE_ROOT = path.resolve(process.cwd(), 'public', 'uploads', 'image', 'puxin');
-const PUXIN_VIDEO_ROOT = path.resolve(process.cwd(), 'public', 'uploads', 'video', 'puxin');
 
 export const VEO_ALLOWED_DURATIONS = [4, 6, 8] as const;
 export type VeoDurationSeconds = (typeof VEO_ALLOWED_DURATIONS)[number];
@@ -47,6 +47,13 @@ export function resolvePuxinImagePath(imageUrl: string): string {
     throw new Error('Scene image path is outside the Puxin upload directory');
   }
   return resolved;
+}
+
+export async function resolveVeoImagePath(imageUrl: string): Promise<string> {
+  if (imageUrl.startsWith('/api/puxin/media/image/')) {
+    return existingMediaPath(imageUrl.slice('/api/puxin/media/'.length));
+  }
+  return resolvePuxinImagePath(imageUrl);
 }
 
 export function isExpectedVeoOperationName(operationName: string): boolean {
@@ -95,7 +102,7 @@ export async function submitPuxinVeoGeneration(input: {
   if (!VEO_ALLOWED_DURATIONS.includes(input.durationSeconds)) {
     throw new Error('Veo duration must be 4, 6, or 8 seconds');
   }
-  const imagePath = resolvePuxinImagePath(input.imageUrl);
+  const imagePath = await resolveVeoImagePath(input.imageUrl);
   const vertical = await buildVerticalInput(imagePath);
   const auth = await createGoogleAuthClient([CLOUD_PLATFORM_SCOPE]);
   const prompt = input.prompt?.trim() || defaultMotionPrompt(input.storyContext);
@@ -164,8 +171,9 @@ export async function pollPuxinVeoGeneration(operationName: string): Promise<Veo
   }
 
   const operationId = operationName.split('/').pop()?.replace(/[^A-Za-z0-9._-]/g, '') || 'generated';
-  await mkdir(PUXIN_VIDEO_ROOT, { recursive: true });
-  const filename = `veo-${operationId}.mp4`;
-  await writeFile(path.join(PUXIN_VIDEO_ROOT, filename), Buffer.from(base64, 'base64'));
-  return { done: true, videoUrl: `/uploads/video/puxin/${filename}`, filteredCount };
+  const key = `video/veo-${operationId}.mp4`;
+  const output = await mediaPath(key);
+  await mkdir(path.dirname(output), { recursive: true });
+  await writeFile(output, Buffer.from(base64, 'base64'));
+  return { done: true, videoUrl: mediaUrl(key), filteredCount };
 }
