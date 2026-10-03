@@ -28,7 +28,7 @@ export function pcmToWav(pcm: Buffer): Buffer {
   header.writeUInt16LE(2, 32); header.writeUInt16LE(16, 34); header.write('data', 36); header.writeUInt32LE(pcm.length, 40);
   return Buffer.concat([header, pcm]);
 }
-export async function synthesizeNarration(input: { text: string; voice?: string; style?: string }) {
+async function synthesizeNarrationUnlocked(input: { text: string; voice?: string; style?: string }) {
   const text = input.text?.trim();
   if (!text) throw new Error('請先輸入旁白');
   const voice = input.voice || 'Kore';
@@ -71,4 +71,19 @@ export async function synthesizeNarration(input: { text: string; voice?: string;
   await mkdir(path.dirname(output), { recursive: true });
   await writeFile(output, wav);
   return { audioUrl: mediaUrl(key), duration: pcm.length / 48000, cached: false, model };
+}
+
+const ttsQueueGlobals = globalThis as typeof globalThis & { puxinTtsTail?: Promise<void> };
+
+export async function synthesizeNarration(input: { text: string; voice?: string; style?: string }) {
+  const previous = ttsQueueGlobals.puxinTtsTail ?? Promise.resolve();
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  ttsQueueGlobals.puxinTtsTail = previous.catch(() => undefined).then(() => gate);
+  await previous.catch(() => undefined);
+  try {
+    return await synthesizeNarrationUnlocked(input);
+  } finally {
+    release();
+  }
 }

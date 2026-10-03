@@ -8,6 +8,7 @@ import {
   createAiJob,
   getAiJob,
   recoverAiJobsAfterRestart,
+  revertAiJob,
   updateAiJob,
 } from '@/lib/puxin/ai-jobs';
 
@@ -66,6 +67,18 @@ describe('durable AI generation jobs', () => {
       sceneLayout: 'cover',
     });
     expect(getAiJob(first.id)?.appliedAt).toBeTruthy();
+
+    const reverted = revertAiJob(first.id);
+    expect(reverted.revision).toBe(project.revision + 2);
+    expect(reverted.project.clips[0]).toMatchObject({
+      imageUrl: '/api/puxin/media/image/test.png',
+      imageEffect: 'none',
+      sceneLayout: 'fit-blur',
+    });
+    expect(getAiJob(first.id)?.appliedAt).toBeNull();
+
+    const reapplied = applyAiJob(first.id);
+    expect(reapplied.project.clips[0].imageUrl).toBe('/api/puxin/media/video/veo.mp4');
   });
 
   it('does not apply a completed result after the source scene has changed', () => {

@@ -1,6 +1,6 @@
 # Puxin Video Studio — production runbook
 
-Updated: 2026-10-02
+Updated: 2026-10-03
 
 ## Canonical locations
 
@@ -9,8 +9,8 @@ Updated: 2026-10-02
 - Google OAuth callback: `https://video-studio.puxin.ccwu.cc/api/puxin/drive/callback`
 - VPS project path: `/srv/ai-workspace/projects/puxin-video-studio`
 - GitHub: `https://github.com/Randytsay/puxin-video-studio`
-- Active branch: `feat/puxin-studio-v01`
-- Pull request: `https://github.com/Randytsay/puxin-video-studio/pull/1`
+- Active branch: `main`
+- V1 pull request: `https://github.com/Randytsay/puxin-video-studio/pull/1` (merged 2026-10-03)
 
 ## Runtime topology
 
@@ -49,6 +49,7 @@ Do not delete `.data/studio` during deploys or cache cleanup.
 - Prefix: `puxin-video-studio/daily/`
 - The daily systemd backup creates a consistent SQLite snapshot plus the complete `media/` tree, keeps a normal `.tar.gz` locally, computes SHA-256, and uploads a private R2 copy.
 - Backups larger than Wrangler's single-object limit are split into 250 MiB parts. A `.manifest.json` is uploaded last and acts as the completion marker. It contains archive size/hash and every part's size/hash.
+- The backup unit must set both `HOME=/srv/ai-workspace/webcodex` and `WorkingDirectory=/srv/ai-workspace/projects/puxin-video-studio`; Wrangler otherwise attempts to create its cache under `/` when systemd starts the job.
 - OAuth tokens and deployment secrets are deliberately not included in the archive. After a disaster restore, Drive OAuth may need to be authorized again.
 - Local retention is seven days. R2 remote retention is currently indefinite; add a lifecycle rule later if storage growth warrants it.
 
@@ -94,8 +95,10 @@ Do not put OAuth client secrets or refresh tokens in this repository.
 
 ## Deployment notes
 
-- Build with: `NODE_OPTIONS=--max-old-space-size=4096 npm run build`
+- Production is deployed from an exact commit on `main`. `git rev-parse HEAD`, `.data/studio/deployed-sha`, and Docker label `puxin.release.sha` must match after every release.
+- On this VPS host, build with: `NODE_OPTIONS=--max-old-space-size=4096 /usr/local/bin/node node_modules/next/dist/bin/next build`. Host `npm` is not guaranteed to be on `PATH`.
 - Stop the running app container before replacing `.next`; running Next.js and Turbopack must not share the build directory while rebuilding.
+- Keep the previous app container stopped as one rollback point until the new exact-SHA release passes the health checks below.
 - `PUXIN_RENDER_ORIGIN=http://127.0.0.1:3110`
 - `PUXIN_PUBLIC_ORIGIN=https://video-studio.puxin.ccwu.cc`
 - Public ingress is Cloudflare Tunnel; the app itself is not directly exposed.

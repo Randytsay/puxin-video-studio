@@ -2,7 +2,7 @@ import { beforeEach, afterEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { saveProject, getProject, createJob, listJobs, updateJob } from '@/lib/puxin/projects';
+import { saveProject, getProject, createJob, listJobs, listProjects, setProjectArchived, updateJob } from '@/lib/puxin/projects';
 let dir: string;
 beforeEach(() => { dir = mkdtempSync(path.join(os.tmpdir(), 'puxin-project-test-')); process.env.PUXIN_DATA_DIR = dir; });
 afterEach(() => { delete process.env.PUXIN_DATA_DIR; rmSync(dir, { recursive: true, force: true }); });
@@ -26,5 +26,16 @@ describe('persistent Puxin works', () => {
   });
   it('rejects external media before it reaches the render worker', () => {
     expect(() => saveProject({ title: '拒絕', project: { ...project, clips: [{ ...project.clips[0], imageUrl: 'http://169.254.169.254/' }] } })).toThrow('已匯入');
+  });
+  it('archives and restores a project without deleting its content', () => {
+    const saved = saveProject({ title: '先收起來', project });
+    const archived = setProjectArchived(saved.id, true);
+    expect(archived.archivedAt).toBeTruthy();
+    expect(listProjects()).toHaveLength(0);
+    expect(listProjects({ archived: true })[0]?.id).toBe(saved.id);
+    const restored = setProjectArchived(saved.id, false);
+    expect(restored.archivedAt).toBeUndefined();
+    expect(listProjects()[0]?.id).toBe(saved.id);
+    expect(getProject(saved.id)?.project.clips[0].text).toBe('停一下');
   });
 });

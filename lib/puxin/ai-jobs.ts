@@ -174,3 +174,25 @@ export function applyAiJob(id: string): StudioProject {
   return updated;
 }
 
+export function revertAiJob(id: string): StudioProject {
+  const job = getAiJob(id);
+  if (!job) throw new Error('找不到 AI 動態化工作');
+  if (job.status !== 'done' || !job.videoUrl || !job.appliedAt) throw new Error('這個 AI 動態影片目前沒有可還原的版本');
+  const project = getProject(job.projectId);
+  if (!project) throw new Error('找不到作品');
+  const clip = project.project.clips[job.clipIndex];
+  if (!clip || clip.imageUrl !== job.videoUrl) throw new Error('這個場景套用後已再次修改，無法直接還原');
+  const clips = project.project.clips.map((item, index) => index === job.clipIndex
+    ? { ...item, imageUrl: job.sourceImageUrl, imageEffect: 'none' as const, sceneLayout: 'fit-blur' as const }
+    : item);
+  const updated = saveProject({
+    id: project.id,
+    revision: project.revision,
+    title: project.title,
+    project: { ...project.project, clips },
+    voice: project.voice,
+    voiceStyle: project.voiceStyle,
+  });
+  updateAiJob(id, { appliedAt: null });
+  return updated;
+}

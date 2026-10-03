@@ -10,7 +10,7 @@ type Row = Record<string, string | number | null>;
 interface Database { exec(sql: string): void; prepare(sql: string): { run(...values: (string | number | null)[]): { changes: number }; get(...values: (string | number | null)[]): Row | undefined; all(...values: (string | number | null)[]): Row[] }; }
 export interface StudioProject {
   id: string; title: string; revision: number; createdAt: string; updatedAt: string;
-  project: ProjectInput; voice: string; voiceStyle: string; driveFolderId?: string;
+  project: ProjectInput; voice: string; voiceStyle: string; driveFolderId?: string; archivedAt?: string;
 }
 export interface StudioJob {
   id: string; projectId: string; revision: number; status: 'queued' | 'rendering' | 'done' | 'failed';
@@ -47,15 +47,48 @@ export function database(): Database {
       updated_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS ai_jobs_project_idx ON ai_jobs(project_id, created_at DESC);
-    CREATE INDEX IF NOT EXISTS ai_jobs_status_idx ON ai_jobs(status, created_at);`);
+    CREATE INDEX IF NOT EXISTS ai_jobs_status_idx ON ai_jobs(status, created_at);
+    CREATE TABLE IF NOT EXISTS tts_jobs (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      project_revision INTEGER NOT NULL,
+      status TEXT NOT NULL,
+      progress REAL NOT NULL DEFAULT 0,
+      cursor INTEGER NOT NULL DEFAULT 0,
+      total INTEGER NOT NULL DEFAULT 0,
+      input_json TEXT NOT NULL,
+      error TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS tts_jobs_project_idx ON tts_jobs(project_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS tts_jobs_status_idx ON tts_jobs(status, created_at);`);
   return connection;
 }
 function parseProject(row: Row): StudioProject { return JSON.parse(String(row.document)); }
 function parseJob(row: Row): StudioJob {
   return { id: String(row.id), projectId: String(row.project_id), revision: Number(row.revision), status: row.status as StudioJob['status'], progress: Number(row.progress), error: row.error as string | null, videoUrl: row.video_url as string | null, driveUrl: row.drive_url as string | null, syncError: row.sync_error as string | null, createdAt: String(row.created_at), updatedAt: String(row.updated_at), snapshot: JSON.parse(String(row.snapshot)) };
 }
-export function listProjects(): StudioProject[] { return database().prepare('SELECT * FROM projects ORDER BY updated_at DESC').all().map(parseProject); }
+export function listProjects(options?: { archived?: boolean }): StudioProject[] {
+  const archived = options?.archived === true;
+  return database().prepare('SELECT * FROM projects ORDER BY updated_at DESC').all().map(parseProject).filter(project => archived ? Boolean(project.archivedAt) : !project.archivedAt);
+}
 export function getProject(id: string): StudioProject | null { const row = database().prepare('SELECT * FROM projects WHERE id=?').get(id); return row ? parseProject(row) : null; }
+export function setProjectArchived(id: string, archived: boolean): StudioProject {
+  const existing = getProject(id);
+  if (!existing) throw new Error('找不到作品');
+  const now = new Date().toISOString();
+  const record: StudioProject = {
+    ...existing,
+    revision: existing.revision + 1,
+    updatedAt: now,
+    archivedAt: archived ? now : undefined,
+  };
+  const update = database().prepare('UPDATE projects SET revision=?,updated_at=?,document=? WHERE id=? AND revision=?')
+    .run(record.revision, now, JSON.stringify(record), id, existing.revision);
+  if (!update.changes) throw new Error('作品已在另一個視窗更新，請重新整理');
+  return record;
+}
 export function saveProject(input: { id?: string; revision?: number; title: string; project: unknown; voice?: string; voiceStyle?: string }): StudioProject {
   const title = input.title?.trim().slice(0, 120);
   if (!title) throw new Error('請輸入作品名稱');
@@ -69,7 +102,7 @@ export function saveProject(input: { id?: string; revision?: number; title: stri
   const existing = input.id ? getProject(input.id) : null;
   if (input.id && !existing) throw new Error('找不到作品');
   if (existing && input.revision !== existing.revision) throw new Error('作品已在另一個視窗更新，請重新開啟');
-  const record: StudioProject = { id: existing?.id || randomUUID(), title, revision: (existing?.revision || 0) + 1, createdAt: existing?.createdAt || now, updatedAt: now, project: result.project, voice: input.voice?.slice(0, 40) || existing?.voice || 'Kore', voiceStyle: input.voiceStyle?.slice(0, 800) ?? existing?.voiceStyle ?? '請用自然的台灣華語，溫和、清楚，不刻意煽情；句子之間自然停頓。', driveFolderId: existing?.driveFolderId };
+  const record: StudioProject = { id: existing?.id || randomUUID(), title, revision: (existing?.revision || 0) + 1, createdAt: existing?.createdAt || now, updatedAt: now, project: result.project, voice: input.voice?.slice(0, 40) || existing?.voice || 'Kore', voiceStyle: input.voiceStyle?.slice(0, 800) ?? existing?.voiceStyle ?? '請用自然的台灣華語，溫和、清楚，不刻意煽情；句子之間自然停頓。', driveFolderId: existing?.driveFolderId, archivedAt: existing?.archivedAt };
   if (existing) {
     const update = database().prepare('UPDATE projects SET title=?,revision=?,updated_at=?,document=? WHERE id=? AND revision=?').run(title, record.revision, now, JSON.stringify(record), record.id, existing.revision);
     if (!update.changes) throw new Error('作品已在另一個視窗更新，請重新開啟');

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { chooseVeoDurationSeconds, resolvePuxinImagePath, resolveVeoImagePath } from '@/lib/puxin/veo';
@@ -32,6 +32,6 @@ describe('Puxin Veo helpers', () => {
     await mkdir(imageDir, { recursive: true });
     const file = path.join(imageDir, 'scene.png');
     await writeFile(file, Buffer.from('test'));
-    await expect(resolveVeoImagePath('/api/puxin/media/image/scene.png')).resolves.toBe(file);
+    await expect(resolveVeoImagePath('/api/puxin/media/image/scene.png')).resolves.toBe(await realpath(file));
   });
 });

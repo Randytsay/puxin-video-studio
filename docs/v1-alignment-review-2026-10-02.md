@@ -1,6 +1,6 @@
 # Puxin Video Studio V1 — plan alignment & gap review
 
-Date: 2026-10-02
+Updated: 2026-10-03
 
 ## Baseline: original product plan
 
@@ -22,11 +22,11 @@ The implementation later added project persistence, durable render jobs, Drive r
 | Original capability | Current status | Assessment |
 | --- | --- | --- |
 | Drive source library | Complete | `IG輪播素材` is readable through keyless service-account impersonation. |
-| Comic split | Mostly complete | V1 exposes explicit single/double split with adjustable divider. The auto detector still exists in the engine/API but is intentionally not exposed in the V1 creation UI. |
+| Comic split | Complete | V1 exposes explicit single/double split with adjustable divider plus a non-destructive 「建議拆格」 analysis step. The suggested divider is shown first and the image is only split when the operator creates the project. |
 | 9:16 scene builder | Complete | 9:16 and 3:4 are supported; original-image preserving `contain` / `fit-blur` plus `cover` are available. |
 | Preserve original image/text | Complete for static scenes | Static source is preserved without recreating text. Veo is prompted to preserve it, but generative video cannot guarantee pixel-perfect typography. |
-| Gemini TTS | Functionally complete | Real Vertex generation, six voices, style prompt, cache, per-scene audition and bulk generation are implemented. Transient `429/5xx` responses now retry with bounded backoff. |
-| Veo AI motion | Functionally complete | V1 has explicit per-scene confirmation, Veo 3.1 Fast generation and persistent MP4 replacement. Long-running Veo state is still client-polled rather than persisted server-side. |
+| Gemini TTS | Complete for V1 | Real Vertex generation, six voices, style prompt, cache, per-scene generation, voice audition and SQLite-backed bulk narration jobs are implemented. Batch work survives page closure/service restart; transient `429/5xx` responses retry with bounded backoff. |
+| Veo AI motion | Complete for V1 | V1 has explicit per-scene confirmation, durable server-side Veo jobs, persistent MP4 replacement and one-click restoration of the original static image. |
 | MiniMax H3 provider | Integrated external provider | V1 can submit/poll H3 jobs through an external Colab runner without copying the unlicensed skill source into this MIT repository. Runtime/ADC connectivity is verified; the currently connected Colab account reports 0 compute-unit balance, so paid H3 inference has not been run. |
 | BGM | Complete | Upload, volume control and Remotion mixing work. No curated Puxin BGM library yet. |
 | Subtitles | Partial | Scene-level narration subtitle on/off exists. Word-level timing/SRT and V1 typography/timing editor are not implemented. |
@@ -37,7 +37,7 @@ The implementation later added project persistence, durable render jobs, Drive r
 | Drive result sync | Complete | MP4, project JSON, narration script and per-scene WAV files are written to `製作成果`. |
 | Fixed production URL | Complete | `https://video-studio.puxin.ccwu.cc/studio` through a Cloudflare Named Tunnel. |
 | Authentication | Complete for current private use | Basic Auth protects the full app. This is not user/role management. |
-| Backup | Partial | Daily seven-day local backup works; there is no off-site copy yet. |
+| Backup | Complete for V1 | Daily seven-day local backup plus private R2 off-site multipart backup is active. SHA-256 is uploaded and the manifest is written last as the completion marker. |
 
 ## Full end-to-end validation — water-kettle story
 
@@ -79,32 +79,30 @@ The first bulk run reached Vertex quota/rate limiting at scene 12 (`429 Resource
 
 ## Remaining work
 
-### P0 — recommended before calling the product V1.0 final
+### P0 — external account lifecycle
 
-1. **Durable bulk TTS queue.** TTS transient retry is complete, but “generate all narration” still runs as one browser workflow. Persist the batch itself if unattended bulk narration becomes important.
-2. **OAuth production status.** The owner OAuth app is still External/Testing. Complete the appropriate Google OAuth publishing/verification path for long-term refresh-token stability.
+1. **OAuth production status.** The owner OAuth app is still External/Testing. Complete the appropriate Google OAuth publishing/verification path for long-term refresh-token stability. This is a Google account/consent-screen action rather than a missing V1 code path.
 
 Completed reliability items:
 
 - Veo/H3 scene generation now uses SQLite-backed server jobs. Veo operation names survive service/browser restarts and server polling resumes automatically. H3 runs independently of the browser; after a service restart its local runner job is safely re-queued from the same durable request.
 - Application data now receives a daily private R2 off-site copy in `puxin-video-studio-backups`. Large archives are chunked, hashed and completed with a manifest; local seven-day backups remain for fast recovery.
+- Bulk TTS now uses a SQLite-backed server queue with cursor/progress recovery. Interactive and background TTS calls are globally serialized to avoid accidental provider concurrency.
 
 ### P1 — product-quality improvements
 
-5. **TTS voice acceptance and presets.** Technically validated, but Puxin has not yet chosen the preferred default voice/style by listening. Add a short six-voice audition screen and store an approved Puxin preset.
-6. **Veo revert/versioning.** Preserve the original static visual as an explicit previous version so operators can compare/revert after AI animation.
-7. **Automatic split suggestion in V1 UI.** The auto detector exists but V1 currently defaults to explicit operator control. Offer “建議拆格” with a visible proposed divider, requiring confirmation.
-8. **Subtitle workflow.** Add SRT/word-level timing and subtitle typography controls if narration captions are required for short-video publishing; current V1 is scene-level only.
-9. **BGM library.** Current workflow accepts uploads but has no curated, licensed Puxin music library or reusable presets.
-10. **Cost/usage guardrails.** Show estimated Veo/TTS use before batch actions and optionally daily/monthly usage summaries to reduce accidental credit consumption.
-11. **Project lifecycle.** Add archive/delete/restore and orphan-media garbage collection. Current V1 saves and duplicates projects but does not provide project deletion.
+2. **TTS approved preset.** A six-voice audition action is now available and uses the same cache as production TTS. Puxin still needs a human listening decision for the organization-wide approved default voice/style.
+3. **Subtitle workflow.** Add SRT/word-level timing and V1 subtitle typography controls if narration captions are required for short-video publishing; current V1 remains scene-level.
+4. **BGM library.** Current workflow accepts uploads but has no curated, licensed Puxin music library or reusable presets.
+5. **Cost/usage summaries.** Batch TTS now shows pending scene and character counts before the user starts it, and all paid generation remains explicit. Daily/monthly provider-cost summaries are not yet implemented.
+6. **Project lifecycle cleanup.** Soft archive/restore is implemented so the library can be kept tidy without deleting media. Hard delete and orphan-media garbage collection remain intentionally separate administrative actions.
 
 ### P2 — optional/future scope
 
-12. **MiniMax H3 capacity.** The external runner/API/UI path is implemented; actual H3 inference awaits a Colab account with available compute units. Keep the external source outside this MIT fork unless licensing is clarified.
-13. **Direct social publishing.** Instagram/LINE publishing is not part of the current V1 and was not required for the original core pipeline; add only if Puxin wants a publishing console.
-14. **Multi-user roles/audit.** Basic Auth is sufficient for private operation but does not provide named users, roles, or edit history.
-15. **Cloud-native render scaling.** Current single-worker VPS rendering is appropriate for the expected workload; scale only if queue demand grows.
+7. **MiniMax H3 capacity.** The external runner/API/UI path is implemented; actual H3 inference awaits a Colab account with available compute units. Keep the external source outside this MIT fork unless licensing is clarified.
+8. **Direct social publishing.** Instagram/LINE publishing is not part of the current V1 and was not required for the original core pipeline; add only if Puxin wants a publishing console.
+9. **Multi-user roles/audit.** Basic Auth is sufficient for private operation but does not provide named users, roles, or edit history.
+10. **Cloud-native render scaling.** Current single-worker VPS rendering is appropriate for the expected workload; scale only if queue demand grows.
 
 ## Conclusion
 
