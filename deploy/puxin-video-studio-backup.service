@@ -1,0 +1,17 @@
+[Unit]
+Description=Backup Puxin Studio works and media
+
+[Service]
+Type=oneshot
+User=webcodex
+Group=webcodex
+UMask=0077
+WorkingDirectory=/srv/ai-workspace/projects/puxin-video-studio
+Environment=HOME=/srv/ai-workspace/webcodex
+Environment=PUXIN_DATA_DIR=/srv/ai-workspace/projects/puxin-video-studio/.data/studio
+Environment=PUXIN_R2_BACKUP_BUCKET=puxin-video-studio-backups
+Environment=PUXIN_R2_BACKUP_PREFIX=puxin-video-studio/daily
+Environment="PUXIN_R2_WRANGLER=/srv/ai-workspace/webcodex/.local/bin/npx --yes wrangler@4.147.0"
+ExecStart=/usr/bin/python3 /srv/ai-workspace/projects/puxin-video-studio/deploy/backup-studio.py
+Nice=15
+CPUQuota=50%

@@ -42,6 +42,7 @@ export interface ProjectInput {
   aspectRatio: VideoAspectRatio;
   productName?: string;
   audioEnabled: boolean;
+  brand?: { enabled: boolean; closingText: string };
 }
 
 export interface ValidationIssue {
@@ -96,8 +97,9 @@ function limitsFromEnv(): ProjectLimits {
 }
 
 const RESOLUTIONS: readonly string[] = ['720p', '1080p'];
-const ASPECT_RATIOS: readonly string[] = ['16:9', '9:16', '1:1'];
+const ASPECT_RATIOS: readonly string[] = ['16:9', '9:16', '1:1', '3:4'];
 const IMAGE_EFFECTS: readonly string[] = ['none', 'kenBurns', 'zoom', 'pan', 'zoomOut', 'pulse'];
+const SCENE_LAYOUTS: readonly string[] = ['cover', 'fit-blur', 'contain'];
 const TRANSITIONS: readonly string[] = [
   'none', 'fade', 'slideLeft', 'slideRight', 'slideUp', 'slideDown',
   'wipeLeft', 'wipeRight', 'zoomIn', 'zoomOut', 'crossfade', 'slide',
@@ -114,6 +116,7 @@ export const PROJECT_ENUMS = {
   resolutions: RESOLUTIONS,
   aspectRatios: ASPECT_RATIOS,
   imageEffects: IMAGE_EFFECTS,
+  sceneLayouts: SCENE_LAYOUTS,
   transitions: TRANSITIONS,
   subtitlePositions: SUBTITLE_POSITIONS,
   subtitleAligns: SUBTITLE_ALIGNS,
@@ -196,6 +199,12 @@ export function validateProject(input: unknown): ValidationResult {
       }
       if (clip.imageEffect !== undefined && !IMAGE_EFFECTS.includes(clip.imageEffect as string)) {
         err(at('imageEffect'), `imageEffect must be one of: ${IMAGE_EFFECTS.join(', ')}`);
+      }
+      if (clip.sceneLayout !== undefined && !SCENE_LAYOUTS.includes(clip.sceneLayout as string)) {
+        err(at('sceneLayout'), `sceneLayout must be one of: ${SCENE_LAYOUTS.join(', ')}`);
+      }
+      if (clip.showSceneSubtitle !== undefined && typeof clip.showSceneSubtitle !== 'boolean') {
+        err(at('showSceneSubtitle'), 'showSceneSubtitle must be a boolean');
       }
       if (clip.transitionType !== undefined && !TRANSITIONS.includes(clip.transitionType as string)) {
         err(at('transitionType'), `transitionType must be one of: ${TRANSITIONS.join(', ')}`);
@@ -309,6 +318,8 @@ export function validateProject(input: unknown): ValidationResult {
     err('audioEnabled', 'audioEnabled must be a boolean');
   }
 
+  if (input.brand !== undefined && (!isRecord(input.brand) || typeof input.brand.enabled !== 'boolean' || typeof input.brand.closingText !== 'string' || input.brand.closingText.length > 300)) err('brand', '品牌設定不正確');
+
   if (errors.length > 0) {
     return { ok: false, errors, warnings };
   }
@@ -326,6 +337,7 @@ export function validateProject(input: unknown): ValidationResult {
     aspectRatio: aspectRatio as VideoAspectRatio,
     productName: input.productName as string | undefined,
     audioEnabled: (input.audioEnabled as boolean | undefined) ?? true,
+    ...(input.brand ? { brand: input.brand as { enabled: boolean; closingText: string } } : {}),
   };
 
   const summary: ProjectSummary = {

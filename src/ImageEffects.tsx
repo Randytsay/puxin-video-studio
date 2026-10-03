@@ -17,6 +17,7 @@ interface ImageEffectsProps {
   effect?: 'zoom' | 'pan' | 'kenBurns' | 'zoomOut' | 'pulse' | 'none';
   scale?: number; // 画像のスケール（1.0 = 100%, 0.5 = 50%, 2.0 = 200%）
   position?: { x: number; y: number }; // 画像の位置（%で指定）
+  layoutMode?: 'cover' | 'fit-blur' | 'contain';
 }
 
 // Treat a clip's primary visual asset as a video when its URL points at a
@@ -37,7 +38,8 @@ function resolveAssetSrc(url: string): string {
     try {
       const u = new URL(url);
       const isLocalhost = u.hostname === 'localhost' || u.hostname === '127.0.0.1';
-      const isPublicPath = u.pathname.startsWith('/uploads/') || u.pathname.startsWith('/gold/');
+      const isPublicPath = u.pathname.startsWith('/uploads/') || u.pathname.startsWith('/gold/') || u.pathname.startsWith('/api/puxin/media/');
+      if (isLocalhost && u.pathname.startsWith('/api/puxin/media/')) return url;
       if (isLocalhost && isPublicPath) {
         return staticFile(u.pathname.replace(/^\//, ''));
       }
@@ -96,6 +98,7 @@ export const ImageWithEffects: React.FC<ImageEffectsProps> = ({
   effect = 'none', // デフォルトはエフェクトなし（控えめに）
   scale = 1.0, // デフォルトは100%
   position = { x: 0, y: 0 }, // デフォルトは中央
+  layoutMode = 'cover',
 }) => {
   // Hooks must run on every render in the same order — call them up-front
   // before any conditional return path. The values are only used by the
@@ -129,7 +132,7 @@ export const ImageWithEffects: React.FC<ImageEffectsProps> = ({
   const style: React.CSSProperties = {
     width: '100%',
     height: '100%',
-    objectFit: 'cover', // contain → coverに変更（画像が画面全体を覆うように）
+    objectFit: layoutMode !== 'cover' ? 'contain' : 'cover',
     transformOrigin: 'center center', // 変換の基準点を中央に設定
   };
 
@@ -266,7 +269,9 @@ export const ImageWithEffects: React.FC<ImageEffectsProps> = ({
       const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1';
       const isPublicPath = relativePath.startsWith('/uploads/') || relativePath.startsWith('/gold/');
       
-      if (isLocalhost && isPublicPath) {
+      if (isLocalhost && relativePath.startsWith('/api/puxin/media/')) {
+        imageSrc = imageUrl;
+      } else if (isLocalhost && isPublicPath) {
         // staticFileはpublicディレクトリからの相対パスを期待
         // /uploads/... → uploads/... (先頭の/を削除)
         const staticPath = relativePath.startsWith('/') ? relativePath.slice(1) : relativePath;
@@ -372,6 +377,64 @@ export const ImageWithEffects: React.FC<ImageEffectsProps> = ({
     objectFit: style.objectFit,
     transformOrigin: style.transformOrigin,
   });
+
+  if (layoutMode === 'contain') {
+    return (
+      <AbsoluteFill style={{ overflow: 'hidden', backgroundColor: '#171510' }}>
+        <Img
+          src={imageSrc}
+          style={{
+            position: 'absolute',
+            inset: '-7%',
+            width: '114%',
+            height: '114%',
+            objectFit: 'cover',
+            filter: 'blur(30px) brightness(0.72) saturate(0.88)',
+            transform: 'scale(1.1)',
+          }}
+        />
+        <AbsoluteFill style={{ background: 'rgba(24, 20, 14, 0.08)' }} />
+        <AbsoluteFill style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <Img src={imageSrc} style={{ ...style, width: '100%', height: '100%', objectFit: 'contain' }} />
+        </AbsoluteFill>
+      </AbsoluteFill>
+    );
+  }
+
+  if (layoutMode === 'fit-blur') {
+    return (
+      <AbsoluteFill style={{ overflow: 'hidden', backgroundColor: '#171510' }}>
+        <Img
+          src={imageSrc}
+          style={{
+            position: 'absolute',
+            inset: '-6%',
+            width: '112%',
+            height: '112%',
+            objectFit: 'cover',
+            filter: 'blur(36px) brightness(0.64) saturate(0.82)',
+            transform: 'scale(1.08)',
+          }}
+        />
+        <AbsoluteFill style={{ background: 'rgba(24, 20, 14, 0.12)' }} />
+        <AbsoluteFill style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '5% 0' }}>
+          <Img
+            src={imageSrc}
+            style={{
+              ...style,
+              width: '100%',
+              height: '100%',
+              objectFit: 'contain',
+              minWidth: 0,
+              minHeight: 0,
+              maxWidth: '100%',
+              maxHeight: '100%',
+            }}
+          />
+        </AbsoluteFill>
+      </AbsoluteFill>
+    );
+  }
 
   return (
     <AbsoluteFill style={{ 

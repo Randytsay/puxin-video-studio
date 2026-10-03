@@ -7,6 +7,7 @@ import {
   useVideoConfig,
   Sequence,
   staticFile,
+  Img,
 } from 'remotion';
 import { ProductVideoProps, TransitionType } from './types';
 import { computeClipFrameSpans, computeTotalFrames, NARRATION_PLAYBACK_RATE } from './timeline';
@@ -15,7 +16,7 @@ import { TimeBasedSubtitle } from './TimeBasedSubtitle';
 import { ClipTransition } from './Transitions';
 import { ImageWithEffects } from './ImageEffects';
 import { LayoutTemplate, LayoutTemplate as LayoutTemplateType } from './LayoutTemplates';
-export const ProductVideo: React.FC<ProductVideoProps> = ({ clips, productName, tempo = 1.0, audioEnabled = true, subtitles = [], bgmUrl = null, bgmVolume = 0.3, bgmStartTime = 0, bgmEndTime = null, subtitleAudioVolume = 0.8 }) => {
+export const ProductVideo: React.FC<ProductVideoProps> = ({ clips, productName, tempo = 1.0, audioEnabled = true, subtitles = [], bgmUrl = null, bgmVolume = 0.3, bgmStartTime = 0, bgmEndTime = null, brand, subtitleAudioVolume = 0.8 }) => {
   // デバッグログを追加してクリップの変更を確認
   debug('[ProductVideo] ========== Component Rendering ==========');
   debug('[ProductVideo] Clips count:', clips.length);
@@ -104,9 +105,10 @@ export const ProductVideo: React.FC<ProductVideoProps> = ({ clips, productName, 
           audioPlaybackRate={audioPlaybackRate}
           audioEnabled={audioEnabled}
           imageEffect={imageEffect}
-          subtitleAudioVolume={subtitleAudioVolume}
-          scale={clip.scale}
-          position={clip.position}
+           subtitleAudioVolume={subtitleAudioVolume}
+           scale={clip.scale}
+           position={clip.position}
+           sceneLayout={clip.sceneLayout}
         />
       </Sequence>
     );
@@ -157,7 +159,9 @@ export const ProductVideo: React.FC<ProductVideoProps> = ({ clips, productName, 
             const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1';
             const isPublicPath = relativePath.startsWith('/uploads/');
             
-            if (isLocalhost && isPublicPath) {
+            if (isLocalhost && relativePath.startsWith('/api/puxin/media/')) {
+              audioSrc = bgmUrl;
+            } else if (isLocalhost && isPublicPath) {
               // staticFileはpublicディレクトリからの相対パスを期待
               // /uploads/audio/... → uploads/audio/... (先頭の/を削除)
               const staticPath = relativePath.startsWith('/') ? relativePath.slice(1) : relativePath;
@@ -303,6 +307,8 @@ export const ProductVideo: React.FC<ProductVideoProps> = ({ clips, productName, 
         );
       })()}
       
+      {brand?.enabled && <div style={{ position: 'absolute', bottom: '5%', right: '5%', zIndex: 10, width: '17%', padding: '1.2%', borderRadius: 12, background: 'rgba(255,255,255,0.92)' }}><Img src={staticFile('brand/puxin-logo.png')} style={{ width: '100%', objectFit: 'contain' }} /></div>}
+      {brand?.closingText && <Sequence from={Math.max(0, computeTotalFrames(clips) - 90)} durationInFrames={90}><AbsoluteFill style={{ justifyContent: 'center', alignItems: 'center', background: 'rgba(19,35,31,0.90)', color: '#fff', padding: '10%', textAlign: 'center', fontSize: 42, whiteSpace: 'pre-line' }}><div>{brand.closingText}</div></AbsoluteFill></Sequence>}
       {/* 時間ベースの字幕を表示（修正案2：デバッグログ追加） */}
       {subtitles && subtitles.length > 0 && (() => {
         debug('[ProductVideo] 字幕レンダリング:', {
@@ -342,6 +348,7 @@ interface VideoClipComponentProps {
   subtitleAudioVolume?: number; // 字幕読み上げの音量
   scale?: number; // 画像のスケール
   position?: { x: number; y: number }; // 画像の位置
+  sceneLayout?: 'cover' | 'fit-blur' | 'contain';
 }
 
 const VideoClipComponent: React.FC<VideoClipComponentProps> = ({ 
@@ -359,6 +366,7 @@ const VideoClipComponent: React.FC<VideoClipComponentProps> = ({
   subtitleAudioVolume = 0.8,
   scale,
   position,
+  sceneLayout,
 }) => {
   const { fps, durationInFrames } = useVideoConfig();
   
@@ -374,7 +382,7 @@ const VideoClipComponent: React.FC<VideoClipComponentProps> = ({
       {/* トランジションは最初の短い時間だけ適用 */}
       <ClipTransition transitionType={transitionType} transitionDuration={safeTransitionDuration}>
         <LayoutTemplate
-          template={layoutTemplate}
+          template={clip.sceneLayout ? 'fullscreen' : layoutTemplate}
           productName={productName}
           clipIndex={clip.index}
           totalClips={clip.totalClips || 1}
@@ -414,6 +422,7 @@ const VideoClipComponent: React.FC<VideoClipComponentProps> = ({
                 effect={imageEffect}
                 scale={scale}
                 position={position}
+                layoutMode={sceneLayout}
               />
             );
           })()}
@@ -443,7 +452,9 @@ const VideoClipComponent: React.FC<VideoClipComponentProps> = ({
                 const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1';
                 const isPublicPath = relativePath.startsWith('/uploads/');
                 
-                if (isLocalhost && isPublicPath) {
+                if (isLocalhost && relativePath.startsWith('/api/puxin/media/')) {
+                  audioSrc = rawAudioPath;
+                } else if (isLocalhost && isPublicPath) {
                   // staticFileはpublicディレクトリからの相対パスを期待
                   // /uploads/audio/... → uploads/audio/... (先頭の/を削除)
                   const staticPath = relativePath.startsWith('/') ? relativePath.slice(1) : relativePath;
@@ -541,7 +552,7 @@ const VideoClipComponent: React.FC<VideoClipComponentProps> = ({
 
           {/* Subtitles - シーンの全期間表示（clip.textが設定されている場合、かつaudioEnabledがtrueの場合のみ） */}
           {/* 編集前の動画（audioEnabled=false）では字幕を表示しない */}
-          {audioEnabled && clip.text && clip.text.trim() && <Subtitle text={clip.text} />}
+          {audioEnabled && clip.showSceneSubtitle !== false && clip.text && clip.text.trim() && <Subtitle text={clip.text} />}
         </LayoutTemplate>
       </ClipTransition>
     </AbsoluteFill>

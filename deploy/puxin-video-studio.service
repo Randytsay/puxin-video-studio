@@ -1,0 +1,27 @@
+[Unit]
+Description=Puxin Video Studio
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=webcodex
+Group=webcodex
+WorkingDirectory=/srv/ai-workspace/projects/puxin-video-studio
+Environment=NODE_ENV=production
+Environment=PORT=3471
+Environment=PUXIN_DATA_DIR=/srv/ai-workspace/projects/puxin-video-studio/.data/studio
+Environment=PUXIN_RENDER_ORIGIN=http://127.0.0.1:3471
+Environment=PUXIN_RENDER_CONCURRENCY=1
+ExecStart=/usr/local/bin/node node_modules/next/dist/bin/next start --hostname 127.0.0.1 --port 3471
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+KillMode=control-group
+UMask=0077
+Nice=10
+CPUQuota=200%
+MemoryMax=4G
+
+[Install]
+WantedBy=multi-user.target

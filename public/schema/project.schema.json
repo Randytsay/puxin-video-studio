@@ -4,23 +4,34 @@
   "title": "Abekyo Project",
   "description": "A complete Abekyo Editor project: the exact JSON accepted by POST /api/render and POST /api/project/validate. Generate this from any program or LLM, then POST it to a running Abekyo server to get an MP4 back.",
   "type": "object",
-  "required": ["clips", "resolution", "aspectRatio"],
+  "required": [
+    "clips",
+    "resolution",
+    "aspectRatio"
+  ],
   "additionalProperties": true,
   "properties": {
     "clips": {
       "type": "array",
       "minItems": 1,
       "description": "Ordered timeline of scenes. Each clip shows an image or video, optionally with narration audio. Clips play back-to-back; total video length is the sum of clip durations.",
-      "items": { "$ref": "#/$defs/clip" }
+      "items": {
+        "$ref": "#/$defs/clip"
+      }
     },
     "subtitles": {
       "type": "array",
       "description": "Time-based subtitle overlays. Times are absolute seconds from the start of the video, independent of clip boundaries.",
-      "items": { "$ref": "#/$defs/subtitle" },
+      "items": {
+        "$ref": "#/$defs/subtitle"
+      },
       "default": []
     },
     "bgmUrl": {
-      "type": ["string", "null"],
+      "type": [
+        "string",
+        "null"
+      ],
       "description": "Background-music audio URL. Same-origin path (e.g. /uploads/audio/track.mp3, as returned by POST /api/upload) or an absolute URL on a host listed in RENDER_ALLOWED_MEDIA_HOSTS.",
       "default": null
     },
@@ -38,19 +49,30 @@
       "default": 0
     },
     "bgmEndTime": {
-      "type": ["number", "null"],
+      "type": [
+        "number",
+        "null"
+      ],
       "minimum": 0,
       "description": "Position in the BGM file where playback stops, in seconds. null plays to the end.",
       "default": null
     },
     "resolution": {
       "type": "string",
-      "enum": ["720p", "1080p"],
+      "enum": [
+        "720p",
+        "1080p"
+      ],
       "description": "Output resolution tier. Combined with aspectRatio to pick pixel dimensions (e.g. 1080p + 16:9 = 1920x1080)."
     },
     "aspectRatio": {
       "type": "string",
-      "enum": ["16:9", "9:16", "1:1"],
+      "enum": [
+        "16:9",
+        "9:16",
+        "1:1",
+        "3:4"
+      ],
       "description": "Output aspect ratio: 16:9 landscape, 9:16 vertical (Shorts/Reels/TikTok), 1:1 square."
     },
     "productName": {
@@ -61,11 +83,30 @@
       "type": "boolean",
       "description": "Master audio switch. false renders a silent video.",
       "default": true
+    },
+    "brand": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "closingText": {
+          "type": "string",
+          "maxLength": 300
+        }
+      },
+      "required": [
+        "enabled",
+        "closingText"
+      ]
     }
   },
   "$defs": {
     "mediaUrl": {
-      "type": ["string", "null"],
+      "type": [
+        "string",
+        "null"
+      ],
       "description": "Same-origin path (/uploads/...) or an absolute http(s) URL on an allowed host."
     },
     "clip": {
@@ -91,7 +132,7 @@
         "duration": {
           "type": "number",
           "exclusiveMinimum": 0,
-          "description": "Clip length in seconds. Defaults to 3 when omitted. Narration audio plays at 1.2x speed, so for a clip with narration set duration = audioDurationSeconds / 1.2. Deployments cap per-clip and total duration (defaults: 300s per clip, 1800s total).",
+          "description": "Clip length in seconds. Defaults to 3 when omitted. Puxin narration defaults to natural 1.0x playback, so a narrated clip can follow the source audio duration directly. Deployments cap per-clip and total duration (defaults: 300s per clip, 1800s total).",
           "default": 3
         },
         "index": {
@@ -106,19 +147,42 @@
         },
         "imageEffect": {
           "type": "string",
-          "enum": ["none", "kenBurns", "zoom", "pan", "zoomOut", "pulse"],
+          "enum": [
+            "none",
+            "kenBurns",
+            "zoom",
+            "pan",
+            "zoomOut",
+            "pulse"
+          ],
           "description": "Motion effect applied to the clip's image.",
           "default": "none"
         },
         "audioStartTime": {
           "type": "number",
           "minimum": 0,
-          "description": "Seconds to skip from the start of audioUrl (trim-in point), measured in the audio file's own timebase. Narration plays at 1.2x speed, so a timeline offset of t seconds corresponds to audioStartTime = t * 1.2.",
+          "description": "Seconds to skip from the start of audioUrl (trim-in point), measured in the audio file's own timebase.",
           "default": 0
         },
         "transitionType": {
           "type": "string",
-          "enum": ["none", "fade", "slideLeft", "slideRight", "slideUp", "slideDown", "wipeLeft", "wipeRight", "zoomIn", "zoomOut", "crossfade", "slide", "zoom", "wipe", "blur"],
+          "enum": [
+            "none",
+            "fade",
+            "slideLeft",
+            "slideRight",
+            "slideUp",
+            "slideDown",
+            "wipeLeft",
+            "wipeRight",
+            "zoomIn",
+            "zoomOut",
+            "crossfade",
+            "slide",
+            "zoom",
+            "wipe",
+            "blur"
+          ],
           "description": "Transition into this clip from the previous one.",
           "default": "none"
         },
@@ -137,24 +201,53 @@
         "position": {
           "type": "object",
           "description": "Image offset in percent of frame size.",
-          "required": ["x", "y"],
+          "required": [
+            "x",
+            "y"
+          ],
           "properties": {
-            "x": { "type": "number" },
-            "y": { "type": "number" }
+            "x": {
+              "type": "number"
+            },
+            "y": {
+              "type": "number"
+            }
           }
+        },
+        "sceneLayout": {
+          "type": "string",
+          "enum": [
+            "cover",
+            "fit-blur",
+            "contain"
+          ],
+          "description": "Visual composition mode. fit-blur preserves the full source over a blurred full-frame copy, useful for vertical video.",
+          "default": "cover"
+        },
+        "showSceneSubtitle": {
+          "type": "boolean",
+          "description": "Whether clip.text is rendered as an extra subtitle. Set false when the source artwork already contains text.",
+          "default": true
         }
       }
     },
     "subtitle": {
       "type": "object",
-      "required": ["text", "startTime", "endTime"],
+      "required": [
+        "text",
+        "startTime",
+        "endTime"
+      ],
       "additionalProperties": true,
       "properties": {
         "id": {
           "type": "string",
           "description": "Unique subtitle id (any unique string; the editor uses timestamps). Recommended so the editor can address each subtitle."
         },
-        "text": { "type": "string", "description": "Text shown on screen. \\n breaks lines." },
+        "text": {
+          "type": "string",
+          "description": "Text shown on screen. \\n breaks lines."
+        },
         "startTime": {
           "type": "number",
           "minimum": 0,
@@ -167,7 +260,11 @@
         },
         "position": {
           "type": "string",
-          "enum": ["top", "center", "bottom"],
+          "enum": [
+            "top",
+            "center",
+            "bottom"
+          ],
           "description": "Coarse vertical anchor. Overridden by positionYPercent when set."
         },
         "fontSize": {
@@ -180,11 +277,21 @@
           "exclusiveMinimum": 0,
           "description": "Preferred over fontSize when present. Same unit."
         },
-        "color": { "type": "string", "description": "CSS text color, e.g. #ffffff." },
-        "backgroundColor": { "type": "string", "description": "CSS background color behind the text. Omit for none." },
+        "color": {
+          "type": "string",
+          "description": "CSS text color, e.g. #ffffff."
+        },
+        "backgroundColor": {
+          "type": "string",
+          "description": "CSS background color behind the text. Omit for none."
+        },
         "align": {
           "type": "string",
-          "enum": ["left", "center", "right"],
+          "enum": [
+            "left",
+            "center",
+            "right"
+          ],
           "description": "Horizontal text alignment."
         },
         "positionYPercent": {
@@ -195,14 +302,44 @@
           "type": "number",
           "description": "Horizontal position, percent of frame width from the left."
         },
-        "fontFamily": { "type": "string" },
-        "fontWeight": { "type": "number", "minimum": 100, "maximum": 900 },
-        "textShadow": { "type": "string", "description": "CSS text-shadow value." },
-        "borderColor": { "type": "string", "description": "Text outline color." },
-        "borderWidth": { "type": "number", "minimum": 0, "description": "Text outline width in px." },
-        "letterSpacing": { "type": "string", "description": "CSS letter-spacing value." },
-        "lineHeight": { "type": "number", "exclusiveMinimum": 0 },
-        "textTransform": { "type": "string", "enum": ["none", "uppercase", "lowercase", "capitalize"] }
+        "fontFamily": {
+          "type": "string"
+        },
+        "fontWeight": {
+          "type": "number",
+          "minimum": 100,
+          "maximum": 900
+        },
+        "textShadow": {
+          "type": "string",
+          "description": "CSS text-shadow value."
+        },
+        "borderColor": {
+          "type": "string",
+          "description": "Text outline color."
+        },
+        "borderWidth": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Text outline width in px."
+        },
+        "letterSpacing": {
+          "type": "string",
+          "description": "CSS letter-spacing value."
+        },
+        "lineHeight": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "textTransform": {
+          "type": "string",
+          "enum": [
+            "none",
+            "uppercase",
+            "lowercase",
+            "capitalize"
+          ]
+        }
       }
     }
   }

@@ -38,7 +38,7 @@ const poppins = Poppins({
 
 const baseUrl = getBaseUrl();
 
-const APP_NAME = "Abekyo Editor";
+const APP_NAME = "普新內容製作台";
 const APP_DESCRIPTION_EN = "Open-source video editor built on Remotion. Upload images and audio, arrange clips, add subtitles and BGM, then export.";
 const APP_DESCRIPTION_JA = "Remotionベースのオープンソース動画編集エディタ。画像と音声をアップロードし、クリップ配置・字幕・BGM編集を行い、動画として書き出せます。";
 
@@ -90,7 +90,7 @@ export default async function RootLayout({
   const messages = await getMessages();
 
   return (
-    <html lang={locale}>
+    <html lang="zh-Hant">
       <body
         className={`${geistSans.variable} ${geistMono.variable} ${notoSansJP.variable} ${inter.variable} ${roboto.variable} ${poppins.variable} antialiased`}
       >

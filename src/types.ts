@@ -1,5 +1,5 @@
 export type VideoResolution = '720p' | '1080p';
-export type VideoAspectRatio = '16:9' | '9:16' | '1:1';
+export type VideoAspectRatio = '16:9' | '9:16' | '1:1' | '3:4';
 
 export interface ResolutionConfig {
   width: number;
@@ -10,11 +10,13 @@ export interface ResolutionConfig {
 // アスペクト比ごとの解像度設定
 export const RESOLUTIONS: Record<VideoResolution, Record<VideoAspectRatio, ResolutionConfig>> = {
   '720p': {
+    '3:4': { width: 720, height: 960, label: '720p (3:4)' },
     '16:9': { width: 1280, height: 720, label: '720p (HD)' },
     '9:16': { width: 720, height: 1280, label: '720p (縦型)' },
     '1:1': { width: 720, height: 720, label: '720p (正方形)' },
   },
   '1080p': {
+    '3:4': { width: 1080, height: 1440, label: '1080p (3:4)' },
     '16:9': { width: 1920, height: 1080, label: '1080p (Full HD)' },
     '9:16': { width: 1080, height: 1920, label: '1080p (縦型)' },
     '1:1': { width: 1080, height: 1080, label: '1080p (正方形)' },
@@ -34,6 +36,7 @@ export interface ProductVideoProps {
   bgmVolume?: number; // BGMの音量（0.0〜1.0）
   bgmStartTime?: number; // BGMの開始位置（秒）
   bgmEndTime?: number | null; // BGMの終了位置（秒、nullの場合は最後まで）
+  brand?: { enabled: boolean; closingText: string };
   subtitleAudioVolume?: number; // 字幕読み上げの音量（0.0〜1.0）
 }
 
@@ -55,6 +58,8 @@ export interface VideoClip {
   transitionDuration?: number; // トランジションの長さ（秒、デフォルト: 0.5）
   scale?: number; // 画像のスケール（1.0 = 100%, 0.5 = 50%, 2.0 = 200%）
   position?: { x: number; y: number }; // 画像の位置（%で指定、デフォルト: { x: 0, y: 0 }）
+  sceneLayout?: 'cover' | 'fit-blur' | 'contain';
+  showSceneSubtitle?: boolean; // 原画像に文字がある場合は false にして重複字幕を避ける
 }
 
 export interface Subtitle {
